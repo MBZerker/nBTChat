@@ -2125,12 +2125,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     String latestName = json.optString("versionName", "");
                     String pageUrl = json.optString("pageUrl", updatePageUrl);
                     String apkUrl = json.optString("apkUrl", updateApkUrl);
+                    boolean critical = json.optBoolean("critical", false);
                     int currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
                     runOnUiThread(() -> {
                         updateAvailable = latestCode > currentCode;
                         updateVersionName = latestName;
                         updatePageUrl = pageUrl;
                         updateApkUrl = apkUrl;
+                        if (updateAvailable && critical && settingsStore.shouldNotifyCriticalUpdate(latestName)) {
+                            NotificationHelper.showCriticalUpdateNotification(this, latestName, updateApkUrl);
+                        }
                         if (updateAvailable && ("home".equals(currentScreen) || "chat".equals(currentScreen) || "scanner".equals(currentScreen))) {
                             refreshCurrentScreen();
                         } else if (showIfCurrent && !updateAvailable) {

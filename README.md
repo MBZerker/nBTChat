@@ -29,6 +29,7 @@ Aplicativo Android de chat local via Bluetooth, sem servidor e sem internet.
 - Menu com edicao de perfil, configuracoes, compartilhamento do app, alternancia claro/escuro e apagamento de conversa no chat.
 - Configuracao para ativar/desativar notificacoes de mensagens.
 - Verificacao de atualizacao via `docs/update.json`.
+- Notificacao de atualizacao apenas quando `critical` estiver marcado como `true` no manifesto.
 - Pagina de download em `docs/` para GitHub Pages.
 
 ## Build

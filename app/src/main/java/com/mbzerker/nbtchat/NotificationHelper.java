@@ -7,13 +7,16 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 
 public final class NotificationHelper {
     private static final String REQUEST_CHANNEL_ID = "bluetooth_requests";
     private static final String BACKGROUND_CHANNEL_ID = "bluetooth_background_silent";
     private static final String MESSAGE_CHANNEL_ID = "chat_messages";
+    private static final String UPDATE_CHANNEL_ID = "critical_updates";
     private static final int REQUEST_NOTIFICATION_ID = 42;
+    private static final int UPDATE_NOTIFICATION_ID = 88;
     public static final int ONLINE_NOTIFICATION_ID = 73;
 
     private NotificationHelper() {
@@ -50,6 +53,14 @@ public final class NotificationHelper {
         );
         messageChannel.setDescription("Mensagens recebidas por Bluetooth.");
         manager.createNotificationChannel(messageChannel);
+
+        NotificationChannel updateChannel = new NotificationChannel(
+                UPDATE_CHANNEL_ID,
+                "Atualizacoes criticas",
+                NotificationManager.IMPORTANCE_HIGH
+        );
+        updateChannel.setDescription("Avisos apenas para atualizacoes criticas do nBTChat.");
+        manager.createNotificationChannel(updateChannel);
     }
 
     public static void showConnectionRequest(Context context, String remoteName) {
@@ -133,5 +144,31 @@ public final class NotificationHelper {
 
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         manager.notify(remoteAddress == null ? 44 : remoteAddress.hashCode(), notification);
+    }
+
+    public static void showCriticalUpdateNotification(Context context, String versionName, String apkUrl) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        Intent openIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl));
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                context,
+                UPDATE_NOTIFICATION_ID,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        android.app.Notification notification = new android.app.Notification.Builder(context, UPDATE_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle("Atualizacao critica do nBTChat")
+                .setContentText(versionName == null || versionName.isEmpty() ? "Baixe a nova versao." : "Versao " + versionName + " disponivel.")
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build();
+
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        manager.notify(UPDATE_NOTIFICATION_ID, notification);
     }
 }

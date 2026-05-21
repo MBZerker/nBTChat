@@ -9,6 +9,7 @@ public final class AppSettingsStore {
     private static final String KEY_SCAN_FIRST_SEEN_AT = "scan_first_seen_at";
     private static final String KEY_SCAN_LAST_PROMPT_AT = "scan_last_prompt_at";
     private static final String KEY_SCAN_DISMISSED = "scan_dismissed";
+    private static final String KEY_LAST_CRITICAL_UPDATE = "last_critical_update";
     private static final long SCAN_PROMPT_INTERVAL_MS = 12L * 60L * 60L * 1000L;
     private static final long SCAN_PROMPT_WINDOW_MS = 3L * 24L * 60L * 60L * 1000L;
 
@@ -45,6 +46,18 @@ public final class AppSettingsStore {
             return false;
         }
         prefs.edit().putLong(KEY_SCAN_LAST_PROMPT_AT, now).apply();
+        return true;
+    }
+
+    public boolean shouldNotifyCriticalUpdate(String versionName) {
+        if (versionName == null || versionName.trim().isEmpty()) {
+            return false;
+        }
+        String last = prefs.getString(KEY_LAST_CRITICAL_UPDATE, "");
+        if (versionName.equals(last)) {
+            return false;
+        }
+        prefs.edit().putString(KEY_LAST_CRITICAL_UPDATE, versionName).apply();
         return true;
     }
 }
