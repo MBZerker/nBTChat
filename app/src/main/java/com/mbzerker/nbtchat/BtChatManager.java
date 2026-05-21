@@ -57,6 +57,8 @@ public final class BtChatManager {
 
         void onMessageDeleted(String remoteAddress, String id);
 
+        void onDisconnected(String remoteAddress);
+
         void onError(String message);
     }
 
@@ -616,6 +618,9 @@ public final class BtChatManager {
                 closeQuietly(socket);
                 if (connectedThread == this) {
                     connectedThread = null;
+                }
+                if (remoteAddress != null && !remoteAddress.isEmpty()) {
+                    mainHandler.post(() -> listener.onDisconnected(remoteAddress));
                 }
             }
         }

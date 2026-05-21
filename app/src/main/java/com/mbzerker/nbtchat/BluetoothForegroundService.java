@@ -67,6 +67,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
     @Override
     public void onRemoteProfile(String remoteAddress, UserProfile profile) {
         currentRemoteAddress = remoteAddress == null ? "" : remoteAddress;
+        if (currentRemoteAddress.isEmpty()) {
+            return;
+        }
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         profileStore.saveContact(currentRemoteAddress, currentRemoteProfile);
     }
@@ -74,9 +77,13 @@ public final class BluetoothForegroundService extends Service implements BtChatM
     @Override
     public void onConnected(String remoteAddress, UserProfile profile, String fingerprint) {
         currentRemoteAddress = remoteAddress == null ? "" : remoteAddress;
+        if (currentRemoteAddress.isEmpty()) {
+            return;
+        }
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         profileStore.saveContact(currentRemoteAddress, currentRemoteProfile);
         profileStore.saveFingerprint(currentRemoteAddress, fingerprint);
+        resendUndeliveredMessages(currentRemoteAddress);
     }
 
     @Override
@@ -97,7 +104,11 @@ public final class BluetoothForegroundService extends Service implements BtChatM
             return;
         }
         int unread = messageStore.getUnread(address);
-        String preview = MessageStore.KIND_IMAGE.equals(kind) ? "Imagem" : (MessageStore.KIND_VOICE.equals(kind) ? "Mensagem de voz" : body);
+        String preview = MessageStore.KIND_IMAGE.equals(kind)
+                ? "Imagem"
+                : (MessageStore.KIND_VOICE.equals(kind)
+                ? "Mensagem de voz"
+                : (MessageStore.KIND_TABLE_100.equals(kind) ? "Tabela 100" : body));
         NotificationHelper.showMessageNotification(this, address, remoteName, preview, unread);
 
         Intent changed = new Intent(MessageStore.ACTION_MESSAGES_CHANGED);
@@ -124,6 +135,10 @@ public final class BluetoothForegroundService extends Service implements BtChatM
     }
 
     @Override
+    public void onDisconnected(String remoteAddress) {
+    }
+
+    @Override
     public void onReceiptReceived(String remoteAddress, String id, String status) {
         String address = remoteAddress == null ? currentRemoteAddress : remoteAddress;
         messageStore.updateStatus(address, id, status);
@@ -137,5 +152,15 @@ public final class BluetoothForegroundService extends Service implements BtChatM
 
     @Override
     public void onError(String message) {
+    }
+
+    private void resendUndeliveredMessages(String address) {
+        if (address == null || address.trim().isEmpty() || btChatManager == null || !btChatManager.canSendTo(address)) {
+            return;
+        }
+        for (MessageStore.ChatMessage message : messageStore.undeliveredOutgoingMessages(address)) {
+            btChatManager.sendChatMessage(address, message.id, message.kind, message.body, message.mediaBase64,
+                    message.durationMs, message.sentAt, message.replyToId, message.replyPreview);
+        }
     }
 }

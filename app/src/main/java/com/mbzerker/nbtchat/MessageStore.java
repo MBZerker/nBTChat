@@ -25,6 +25,7 @@ public final class MessageStore {
     public static final String KIND_TEXT = "text";
     public static final String KIND_IMAGE = "image";
     public static final String KIND_VOICE = "voice";
+    public static final String KIND_TABLE_100 = "table100";
     public static final String STATUS_PENDING = "pending";
     public static final String STATUS_SENT = "sent";
     public static final String STATUS_DELIVERED = "delivered";
@@ -227,6 +228,16 @@ public final class MessageStore {
         return ids;
     }
 
+    public synchronized List<ChatMessage> undeliveredOutgoingMessages(String address) {
+        List<ChatMessage> pending = new ArrayList<>();
+        for (ChatMessage message : loadMessages(address)) {
+            if (message.mine && !STATUS_READ.equals(message.status)) {
+                pending.add(message);
+            }
+        }
+        return pending;
+    }
+
     public String createId() {
         return Long.toHexString(System.currentTimeMillis()) + "-" + Long.toHexString(Double.doubleToLongBits(Math.random()));
     }
@@ -255,6 +266,9 @@ public final class MessageStore {
         }
         if (KIND_VOICE.equals(message.kind)) {
             return message.mine ? "Voce enviou uma mensagem de voz" : "Mensagem de voz";
+        }
+        if (KIND_TABLE_100.equals(message.kind)) {
+            return message.mine ? "Voce enviou uma tabela 100" : "Tabela 100";
         }
         return message.body;
     }

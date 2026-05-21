@@ -31,7 +31,11 @@ import android.os.Looper;
 import android.provider.MediaStore;
 import android.text.SpannableString;
 import android.text.Spanned;
+import android.text.Editable;
+import android.text.InputFilter;
+import android.text.TextWatcher;
 import android.text.TextPaint;
+import android.text.TextUtils;
 import android.text.method.LinkMovementMethod;
 import android.text.style.ClickableSpan;
 import android.util.Base64;
@@ -45,6 +49,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
@@ -116,10 +121,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private ProfileStore profileStore;
     private MessageStore messageStore;
+    private GadgetStore gadgetStore;
     private ThemeStore themeStore;
     private AppSettingsStore settingsStore;
     private BtChatManager btChatManager;
     private TextView stateText;
+    private EditText conversationSearchInput;
     private LinearLayout contactList;
     private LinearLayout messageList;
     private ScrollView messageScroll;
@@ -137,10 +144,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private UserProfile currentRemoteProfile = UserProfile.empty();
     private String currentFingerprint = "";
     private String currentScreen = "";
+    private String conversationFilter = "";
     private String pendingReplyAddress = "";
     private String pendingReplyId = "";
     private String pendingReplyPreview = "";
     private View replyPreviewBar;
+    private TextView chatTitleText;
+    private TextView chatSubtitleText;
+    private ImageView chatConnectionIcon;
     private boolean messageReceiverRegistered;
     private boolean updateAvailable;
     private String updateVersionName = "";
@@ -152,6 +163,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private VoiceControls playingVoiceControls;
     private Runnable voiceTicker;
     private long lastDiscoverableRequestAt;
+    private final Set<String> onlineAddresses = new HashSet<>();
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -177,6 +189,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         profileStore = new ProfileStore(this);
         messageStore = new MessageStore(this);
+        gadgetStore = new GadgetStore(this);
         themeStore = new ThemeStore(this);
         settingsStore = new AppSettingsStore(this);
         darkMode = themeStore.isDarkMode();
@@ -418,15 +431,57 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         stateText = text("Pronto para conversar por Bluetooth.", 14, secondary(), Typeface.NORMAL);
         root.addView(stateText, topMargin(dp(8)));
 
-        Button scanButton = pillButton("Encontrar aparelhos proximos", accent(), darkMode ? "#12171D" : "#17212B");
-        scanButton.setOnClickListener(v -> showNearbyScannerScreen(true));
-        root.addView(scanButton, topMargin(dp(16)));
+        LinearLayout tabBar = horizontal();
+        tabBar.setGravity(Gravity.CENTER_VERTICAL);
+        ImageButton storeTab = iconButton(R.drawable.ic_tent_24, "Loja", dp(46), v -> showStoreScreen());
+        tabBar.addView(storeTab);
+        TextView chatsTab = text("Conversas", 15, darkMode ? "#D9FBE8" : "#0F5132", Typeface.BOLD);
+        chatsTab.setGravity(Gravity.CENTER);
+        chatsTab.setPadding(dp(16), dp(10), dp(16), dp(10));
+        chatsTab.setBackground(rounded(darkMode ? "#18372C" : "#DDF7E8", dp(18), "#16A34A"));
+        tabBar.addView(chatsTab, leftMargin(dp(10), LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(tabBar, topMargin(dp(14)));
 
+        conversationSearchInput = inlineInput("Pesquisar conversas");
+        conversationSearchInput.setSingleLine(true);
+        conversationSearchInput.setText(conversationFilter);
+        conversationSearchInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                conversationFilter = s == null ? "" : s.toString();
+                renderContactList();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+        root.addView(conversationSearchInput, topMargin(dp(14)));
+
+        FrameLayout listFrame = new FrameLayout(this);
         ScrollView listScroll = new ScrollView(this);
         contactList = vertical();
-        contactList.setPadding(0, dp(10), 0, dp(8));
+        contactList.setPadding(0, dp(10), 0, dp(98));
         listScroll.addView(contactList);
-        root.addView(listScroll, new LinearLayout.LayoutParams(
+        listFrame.addView(listScroll, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        ImageButton scanButton = iconButton(R.drawable.ic_invite_24, "Encontrar aparelhos proximos", dp(76), v -> showNearbyScannerScreen(true));
+        scanButton.setColorFilter(Color.WHITE);
+        scanButton.setPadding(dp(15), dp(15), dp(15), dp(15));
+        scanButton.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        scanButton.setBackground(rounded("#16A34A", dp(38), "#16A34A"));
+        FrameLayout.LayoutParams scanParams = new FrameLayout.LayoutParams(dp(76), dp(76), Gravity.RIGHT | Gravity.BOTTOM);
+        scanParams.setMargins(0, 0, dp(4), dp(16));
+        listFrame.addView(scanButton, scanParams);
+
+        root.addView(listFrame, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1
@@ -487,9 +542,32 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return Long.compare(rightAt, leftAt);
         });
 
+        int rendered = 0;
         for (String address : orderedAddresses) {
-            contactList.addView(contactRow(address, candidates.get(address)), topMargin(dp(8)));
+            BtChatManager.DeviceCandidate candidate = candidates.get(address);
+            if (!conversationMatches(address, candidate)) {
+                continue;
+            }
+            contactList.addView(contactRow(address, candidate), topMargin(dp(8)));
+            rendered++;
         }
+        if (rendered == 0) {
+            TextView empty = text("Nenhuma conversa encontrada.", 15, secondary(), Typeface.NORMAL);
+            empty.setGravity(Gravity.CENTER);
+            contactList.addView(empty, topMargin(dp(36)));
+        }
+    }
+
+    private boolean conversationMatches(String address, BtChatManager.DeviceCandidate candidate) {
+        String query = conversationFilter == null ? "" : conversationFilter.trim().toLowerCase(Locale.ROOT);
+        if (query.isEmpty()) {
+            return true;
+        }
+        UserProfile known = profileStore.loadContact(address);
+        MessageStore.ConversationInfo conversation = messageStore.getConversationInfo(address);
+        String name = known.isComplete() ? known.getDisplayName() : (candidate == null ? "Contato nBTChat" : candidate.name);
+        String haystack = (name + " " + known.getStatus() + " " + conversation.lastBody + " " + address).toLowerCase(Locale.ROOT);
+        return haystack.contains(query);
     }
 
     private void suggestNearbyScan(int contactCount) {
@@ -623,8 +701,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else {
             subtitle = "Proximo - pode pedir pareamento ao convidar";
         }
-        info.addView(text(title, 16, primary(), Typeface.BOLD));
-        info.addView(text(subtitle, 13, secondary(), Typeface.NORMAL));
+        TextView titleView = text(safeName(title, "Aparelho nBTChat"), 16, primary(), Typeface.BOLD);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(titleView);
+        TextView subtitleView = text(subtitle, 13, secondary(), Typeface.NORMAL);
+        subtitleView.setSingleLine(true);
+        subtitleView.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(subtitleView);
         LinearLayout.LayoutParams infoParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         infoParams.setMargins(dp(18), 0, 0, 0);
         row.addView(info, infoParams);
@@ -681,8 +765,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String subtitle = conversation.lastBody.isEmpty()
                 ? (known.getStatus().isEmpty() ? "Toque para abrir a conversa" : known.getStatus())
                 : conversation.lastBody;
-        info.addView(text(title, 17, primary(), Typeface.BOLD));
-        info.addView(text(subtitle, 13, secondary(), Typeface.NORMAL));
+        TextView titleView = text(safeName(title, "Contato nBTChat"), 17, primary(), Typeface.BOLD);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(titleView);
+        TextView subtitleView = text(subtitle, 13, secondary(), Typeface.NORMAL);
+        subtitleView.setSingleLine(true);
+        subtitleView.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(subtitleView);
         LinearLayout.LayoutParams infoParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         infoParams.setMargins(dp(20), 0, 0, 0);
         row.addView(info, infoParams);
@@ -744,6 +834,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         EditText nameInput = input("Nome");
         nameInput.setText(saved.getDisplayName());
+        nameInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(36)});
         root.addView(label("Nome"));
         root.addView(nameInput, topMargin(dp(6)));
 
@@ -814,13 +905,25 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         top.addView(avatar, leftMargin(dp(10), dp(46), dp(46)));
 
         LinearLayout who = vertical();
+        LinearLayout nameRow = horizontal();
+        nameRow.setGravity(Gravity.CENTER_VERTICAL);
         String title = currentRemoteProfile.isComplete() ? currentRemoteProfile.getDisplayName() : "Conversa Bluetooth";
-        who.addView(text(title, 17, primary(), Typeface.BOLD));
+        chatTitleText = text(safeName(title, "Conversa Bluetooth"), 17, primary(), Typeface.BOLD);
+        chatTitleText.setSingleLine(true);
+        chatTitleText.setEllipsize(TextUtils.TruncateAt.END);
+        nameRow.addView(chatTitleText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        chatConnectionIcon = new ImageView(this);
+        nameRow.addView(chatConnectionIcon, leftMargin(dp(8), dp(22), dp(22)));
+        who.addView(nameRow);
         String subtitle = currentRemoteProfile.getStatus().isEmpty() ? "Bluetooth seguro" : currentRemoteProfile.getStatus();
-        who.addView(text(subtitle, 12, secondary(), Typeface.NORMAL));
+        chatSubtitleText = text(subtitle, 12, secondary(), Typeface.NORMAL);
+        chatSubtitleText.setSingleLine(true);
+        chatSubtitleText.setEllipsize(TextUtils.TruncateAt.END);
+        who.addView(chatSubtitleText);
         LinearLayout.LayoutParams whoParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         whoParams.setMargins(dp(14), 0, 0, 0);
         top.addView(who, whoParams);
+        updateChatHeaderStatus();
 
         top.addView(menuButton());
         root.addView(top);
@@ -864,6 +967,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         inputParams.setMargins(dp(8), 0, dp(8), 0);
         composer.addView(inputShell, inputParams);
 
+        composer.addView(iconButton(R.drawable.ic_table_24, "Tabela 100", dp(46), v -> sendTable100Message()));
         composer.addView(voiceRecordButton());
         composer.addView(iconButton(R.drawable.ic_send_24, "Enviar", dp(46), v -> sendCurrentMessage()));
         root.addView(composer);
@@ -1134,6 +1238,155 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         clearPendingReply();
     }
 
+    private void sendTable100Message() {
+        if (!hasCurrentConversation()) {
+            return;
+        }
+        if (!gadgetStore.hasTable100()) {
+            Toast.makeText(this, "Compre a Tabela 100 na loja para enviar.", Toast.LENGTH_LONG).show();
+            showStoreScreen();
+            return;
+        }
+        String configuredText = gadgetStore.table100Text();
+        if (configuredText == null || configuredText.trim().isEmpty()) {
+            Toast.makeText(this, "Configure a Tabela 100 antes de enviar.", Toast.LENGTH_LONG).show();
+            showTable100ConfigScreen();
+            return;
+        }
+        String body = configuredText.trim();
+        long sentAt = System.currentTimeMillis();
+        String id = messageStore.createId();
+        String replyToId = activeReplyId();
+        String replyPreview = activeReplyPreview();
+        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_TABLE_100, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
+        addMessageBubble(id, body, true, MessageStore.KIND_TABLE_100, "", 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_TABLE_100, body, "", 0L, sentAt, replyToId, replyPreview);
+        clearPendingReply();
+    }
+
+    private void showStoreScreen() {
+        currentScreen = "store";
+        messageList = null;
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(16));
+        scrollView.addView(root, matchWrap());
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showHomeScreen()));
+        TextView title = text("Loja", 28, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        top.addView(menuButton());
+        root.addView(top);
+
+        TextView subtitle = text("Gadgets oficiais para usar dentro do nBTChat.", 14, secondary(), Typeface.NORMAL);
+        root.addView(subtitle, topMargin(dp(8)));
+
+        root.addView(table100StoreItem(), topMargin(dp(18)));
+
+        setContentView(scrollView);
+        requestInsets(root);
+    }
+
+    private View table100StoreItem() {
+        LinearLayout item = vertical();
+        item.setPadding(dp(14), dp(14), dp(14), dp(14));
+        item.setBackground(rounded(surface(), dp(12), border()));
+
+        LinearLayout header = horizontal();
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_table_24);
+        icon.setColorFilter(color("#16A34A"));
+        icon.setPadding(dp(8), dp(8), dp(8), dp(8));
+        icon.setBackground(rounded(darkMode ? "#18372C" : "#DDF7E8", dp(18), "#16A34A"));
+        header.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+
+        LinearLayout texts = vertical();
+        TextView name = text("Tabela 100", 19, primary(), Typeface.BOLD);
+        texts.addView(name);
+        TextView description = text("100 numeros interativos para enviar em uma conversa.", 13, secondary(), Typeface.NORMAL);
+        description.setLineSpacing(dp(2), 1f);
+        texts.addView(description, topMargin(dp(2)));
+        LinearLayout.LayoutParams textsParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        textsParams.setMargins(dp(14), 0, 0, 0);
+        header.addView(texts, textsParams);
+        item.addView(header);
+
+        if (gadgetStore.hasTable100()) {
+            TextView active = text("Ativo ate " + formatFullDate(gadgetStore.table100Until()), 13, "#16A34A", Typeface.BOLD);
+            item.addView(active, topMargin(dp(14)));
+            TextView current = text(gadgetStore.table100Text().isEmpty() ? "Sem texto configurado." : gadgetStore.table100Text(), 14, primary(), Typeface.NORMAL);
+            current.setPadding(dp(12), dp(10), dp(12), dp(10));
+            current.setBackground(rounded(surfaceAlt(), dp(12), border()));
+            item.addView(current, topMargin(dp(8)));
+            Button configure = pillButton("Configurar", "#16A34A", "#FFFFFF");
+            configure.setOnClickListener(v -> showTable100ConfigScreen());
+            item.addView(configure, topMargin(dp(12)));
+            item.setOnClickListener(v -> showTable100ConfigScreen());
+        } else {
+            TextView price = text("Teste: uso liberado por 7 dias.", 13, secondary(), Typeface.BOLD);
+            item.addView(price, topMargin(dp(14)));
+            Button buy = pillButton("Comprar teste", "#16A34A", "#FFFFFF");
+            buy.setOnClickListener(v -> {
+                gadgetStore.buyTable100();
+                Toast.makeText(this, "Tabela 100 liberada por 7 dias.", Toast.LENGTH_SHORT).show();
+                showTable100ConfigScreen();
+            });
+            item.addView(buy, topMargin(dp(12)));
+            item.setOnClickListener(v -> buy.performClick());
+        }
+        return item;
+    }
+
+    private void showTable100ConfigScreen() {
+        currentScreen = "store_config";
+        messageList = null;
+
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(18), dp(12), dp(18), dp(16));
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showStoreScreen()));
+        TextView title = text("Tabela 100", 25, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        top.addView(menuButton());
+        root.addView(top);
+
+        TextView subtitle = text("Escolha o texto que aparece quando alguem toca em qualquer numero.", 14, secondary(), Typeface.NORMAL);
+        subtitle.setLineSpacing(dp(2), 1f);
+        root.addView(subtitle, topMargin(dp(12)));
+
+        EditText configInput = input("Texto da tabela");
+        configInput.setSingleLine(false);
+        configInput.setMinLines(4);
+        configInput.setMaxLines(8);
+        configInput.setText(gadgetStore.table100Text());
+        root.addView(configInput, topMargin(dp(18)));
+
+        Button save = pillButton("Salvar", "#16A34A", "#FFFFFF");
+        save.setOnClickListener(v -> {
+            gadgetStore.saveTable100Text(configInput.getText().toString());
+            hideKeyboard(configInput);
+            Toast.makeText(this, "Tabela 100 salva.", Toast.LENGTH_SHORT).show();
+            showStoreScreen();
+        });
+        root.addView(save, topMargin(dp(16)));
+
+        setContentView(root);
+        requestInsets(root);
+    }
+
     private void sendOrQueueOutgoing(String address, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
         sendOrQueueOutgoing(address, id, kind, body, mediaBase64, durationMs, sentAt, "", "");
     }
@@ -1172,6 +1425,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 }
             }
             pendingDeletes.removeAll(sentDeletes);
+        }
+    }
+
+    private void resendUndeliveredMessages(String address) {
+        if (address == null || address.isEmpty() || !btChatManager.canSendTo(address)) {
+            return;
+        }
+        for (MessageStore.ChatMessage message : messageStore.undeliveredOutgoingMessages(address)) {
+            btChatManager.sendChatMessage(address, message.id, message.kind, message.body, message.mediaBase64,
+                    message.durationMs, message.sentAt, message.replyToId, message.replyPreview);
         }
     }
 
@@ -1594,7 +1857,26 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             bubble.addView(reply, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
 
-        if (MessageStore.KIND_IMAGE.equals(kind) && mediaBase64 != null && !mediaBase64.isEmpty()) {
+        if (MessageStore.KIND_TABLE_100.equals(kind)) {
+            TextView title = text("Tabela 100", 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
+            bubble.addView(title);
+            TextView hint = text("Toque para expandir os numeros", 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL);
+            bubble.addView(hint, topMargin(dp(2)));
+            final GridLayout[] expandedGrid = new GridLayout[1];
+            View.OnClickListener toggleTable = v -> {
+                if (expandedGrid[0] == null) {
+                    expandedGrid[0] = table100Grid(body, mine);
+                    int insertAt = mine && bubble.getChildCount() > 0 ? bubble.getChildCount() - 1 : bubble.getChildCount();
+                    bubble.addView(expandedGrid[0], insertAt, topMargin(dp(10)));
+                } else {
+                    bubble.removeView(expandedGrid[0]);
+                    expandedGrid[0] = null;
+                }
+            };
+            bubble.setOnClickListener(toggleTable);
+            title.setOnClickListener(toggleTable);
+            hint.setOnClickListener(toggleTable);
+        } else if (MessageStore.KIND_IMAGE.equals(kind) && mediaBase64 != null && !mediaBase64.isEmpty()) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
             Bitmap bitmap = decodePhoto(mediaBase64);
@@ -1680,6 +1962,69 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "\u25F7";
     }
 
+    private GridLayout table100Grid(String configuredText, boolean mine) {
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(5);
+        grid.setPadding(0, dp(4), 0, 0);
+        for (int i = 1; i <= 100; i++) {
+            final int number = i;
+            Button cell = new Button(this);
+            cell.setText(String.valueOf(i));
+            cell.setTextSize(11);
+            cell.setTextColor(color(mine ? "#FFFFFF" : primary()));
+            cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            cell.setAllCaps(false);
+            cell.setMinWidth(0);
+            cell.setMinimumWidth(0);
+            cell.setMinHeight(0);
+            cell.setMinimumHeight(0);
+            cell.setPadding(0, 0, 0, 0);
+            cell.setBackground(rounded(mine ? "#0C5F58" : surfaceAlt(), dp(8), mine ? "#7DD3FC" : border()));
+            cell.setOnClickListener(v -> showTable100NumberDialog(number, configuredText));
+            GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+            params.width = dp(40);
+            params.height = dp(32);
+            params.setMargins(dp(2), dp(2), dp(2), dp(2));
+            grid.addView(cell, params);
+        }
+        return grid;
+    }
+
+    private void showTable100NumberDialog(int number, String configuredText) {
+        String text = configuredText == null || configuredText.trim().isEmpty()
+                ? "Nenhum texto configurado para esta tabela."
+                : configuredText.trim();
+        new AlertDialog.Builder(this)
+                .setTitle("Numero " + number)
+                .setMessage(text)
+                .setPositiveButton("Copiar", (dialog, which) -> copyMessageText(text))
+                .setNegativeButton("Fechar", null)
+                .show();
+    }
+
+    private void updateChatHeaderStatus() {
+        if (chatConnectionIcon == null) {
+            return;
+        }
+        boolean online = currentRemoteAddress != null
+                && !currentRemoteAddress.isEmpty()
+                && (onlineAddresses.contains(currentRemoteAddress) || btChatManager.isConnectedTo(currentRemoteAddress));
+        chatConnectionIcon.setImageResource(online ? R.drawable.ic_status_online_24 : R.drawable.ic_status_offline_24);
+        chatConnectionIcon.setContentDescription(online ? "Online" : "Offline");
+    }
+
+    private void updateChatHeaderProfile() {
+        if (chatTitleText != null) {
+            String title = currentRemoteProfile.isComplete() ? currentRemoteProfile.getDisplayName() : "Conversa Bluetooth";
+            chatTitleText.setText(safeName(title, "Conversa Bluetooth"));
+        }
+        if (chatSubtitleText != null) {
+            String subtitle = currentRemoteProfile.getStatus().isEmpty() ? "Bluetooth seguro" : currentRemoteProfile.getStatus();
+            chatSubtitleText.setText(subtitle);
+        }
+        updateChatHeaderStatus();
+    }
+
     private String statusColor(String status) {
         if (MessageStore.STATUS_READ.equals(status)) {
             return "#60A5FA";
@@ -1706,9 +2051,29 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return new SimpleDateFormat(pattern, Locale.getDefault()).format(new Date(when));
     }
 
+    private String formatFullDate(long when) {
+        if (when <= 0L) {
+            return "";
+        }
+        return new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(new Date(when));
+    }
+
+    private String safeName(String value, String fallback) {
+        String name = value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim();
+        while (name.contains("  ")) {
+            name = name.replace("  ", " ");
+        }
+        if (name.isEmpty()) {
+            name = fallback;
+        }
+        return name.length() > 42 ? name.substring(0, 39) + "..." : name;
+    }
+
     @Override
     public void onBluetoothState(String state) {
-        showState(state);
+        if (!"chat".equals(currentScreen)) {
+            showState(state);
+        }
     }
 
     @Override
@@ -1725,7 +2090,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         discoveredDevices.put(candidate.address, candidate);
-        renderContactList();
+        if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
     }
 
     @Override
@@ -1733,7 +2100,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         showState("Busca finalizada.");
         if ("scanner".equals(currentScreen)) {
             renderNearbyDeviceList();
-        } else {
+        } else if ("home".equals(currentScreen)) {
             renderContactList();
         }
     }
@@ -1746,6 +2113,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     @Override
     public void onRemoteProfile(String remoteAddress, UserProfile profile) {
         String address = remoteAddress == null ? "" : remoteAddress;
+        if (address.isEmpty()) {
+            return;
+        }
         UserProfile updatedProfile = profile == null ? UserProfile.empty() : profile;
         profileStore.saveContact(address, updatedProfile);
         if (address.equals(currentRemoteAddress)) {
@@ -1754,7 +2124,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if ("home".equals(currentScreen)) {
             renderContactList();
         } else if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
-            showChatScreen(currentRemoteProfile, currentFingerprint);
+            updateChatHeaderProfile();
         }
     }
 
@@ -1765,13 +2135,31 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     @Override
     public void onConnected(String remoteAddress, UserProfile profile, String fingerprint) {
-        currentRemoteAddress = remoteAddress == null ? "" : remoteAddress;
-        currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
-        currentFingerprint = fingerprint == null ? "" : fingerprint;
-        profileStore.saveContact(currentRemoteAddress, currentRemoteProfile);
-        profileStore.saveFingerprint(currentRemoteAddress, currentFingerprint);
-        showChatScreen(currentRemoteProfile, currentFingerprint);
-        flushPendingOutgoing(currentRemoteAddress);
+        String address = remoteAddress == null ? "" : remoteAddress;
+        if (address.isEmpty()) {
+            return;
+        }
+        UserProfile profileValue = profile == null ? UserProfile.empty() : profile;
+        String fingerprintValue = fingerprint == null ? "" : fingerprint;
+        onlineAddresses.add(address);
+        profileStore.saveContact(address, profileValue);
+        profileStore.saveFingerprint(address, fingerprintValue);
+
+        boolean activeChat = "chat".equals(currentScreen) && address.equals(currentRemoteAddress);
+        if (activeChat || "scanner".equals(currentScreen)) {
+            currentRemoteAddress = address;
+            currentRemoteProfile = profileValue;
+            currentFingerprint = fingerprintValue;
+            if (activeChat) {
+                updateChatHeaderProfile();
+            } else {
+                showChatScreen(currentRemoteProfile, currentFingerprint);
+            }
+        } else if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
+        flushPendingOutgoing(address);
+        resendUndeliveredMessages(address);
     }
 
     @Override
@@ -1820,8 +2208,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     @Override
+    public void onDisconnected(String remoteAddress) {
+        String address = remoteAddress == null ? "" : remoteAddress;
+        if (!address.isEmpty()) {
+            onlineAddresses.remove(address);
+        }
+        if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+            updateChatHeaderStatus();
+        } else if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
+    }
+
+    @Override
     public void onError(String message) {
-        showState(message);
+        if ("chat".equals(currentScreen) && isQuietConnectionMessage(message)) {
+            updateChatHeaderStatus();
+            return;
+        }
+        if (!"chat".equals(currentScreen)) {
+            showState(message);
+        }
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
@@ -1829,6 +2236,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (stateText != null) {
             stateText.setText(message);
         }
+    }
+
+    private boolean isQuietConnectionMessage(String message) {
+        if (message == null) {
+            return false;
+        }
+        String value = message.toLowerCase(Locale.ROOT);
+        return value.contains("encerrou")
+                || value.contains("encerrada")
+                || value.contains("erro na conexao")
+                || value.contains("nenhuma conversa conectada");
     }
 
     private void handleStoredMessageChange(String address, String id, String status, boolean deleted) {
@@ -1979,7 +2397,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setItems(actions.toArray(new String[0]), (dialog, which) -> {
                     String action = actions.get(which);
                     if ("Copiar".equals(action)) {
-                        if (MessageStore.KIND_TEXT.equals(message.kind) && message.body != null && !message.body.trim().isEmpty()) {
+                        if (message.body != null && !message.body.trim().isEmpty()) {
                             copyMessageText(message.body);
                         } else {
                             Toast.makeText(this, "Esta mensagem nao tem texto para copiar.", Toast.LENGTH_SHORT).show();
@@ -2053,6 +2471,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (MessageStore.KIND_VOICE.equals(message.kind)) {
             return message.mine ? "Voce enviou uma mensagem de voz" : "Mensagem de voz";
+        }
+        if (MessageStore.KIND_TABLE_100.equals(message.kind)) {
+            return message.mine ? "Voce enviou uma tabela 100" : "Tabela 100";
         }
         String body = message.body == null ? "" : message.body.trim();
         if (body.length() > 80) {
@@ -2158,6 +2579,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showNearbyScannerScreen(false);
         } else if ("profile".equals(currentScreen)) {
             showProfileScreen();
+        } else if ("store".equals(currentScreen)) {
+            showStoreScreen();
+        } else if ("store_config".equals(currentScreen)) {
+            showTable100ConfigScreen();
         } else {
             showInitialScreen();
         }
