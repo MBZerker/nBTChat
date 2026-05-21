@@ -1,0 +1,50 @@
+package com.mbzerker.nbtchat;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+public final class AppSettingsStore {
+    private static final String PREFS = "app_settings";
+    private static final String KEY_NOTIFICATIONS_ENABLED = "notifications_enabled";
+    private static final String KEY_SCAN_FIRST_SEEN_AT = "scan_first_seen_at";
+    private static final String KEY_SCAN_LAST_PROMPT_AT = "scan_last_prompt_at";
+    private static final String KEY_SCAN_DISMISSED = "scan_dismissed";
+    private static final long SCAN_PROMPT_INTERVAL_MS = 12L * 60L * 60L * 1000L;
+    private static final long SCAN_PROMPT_WINDOW_MS = 3L * 24L * 60L * 60L * 1000L;
+
+    private final SharedPreferences prefs;
+
+    public AppSettingsStore(Context context) {
+        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    public boolean notificationsEnabled() {
+        return prefs.getBoolean(KEY_NOTIFICATIONS_ENABLED, true);
+    }
+
+    public void setNotificationsEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_NOTIFICATIONS_ENABLED, enabled).apply();
+    }
+
+    public boolean shouldPromptNearbyScan(int contactCount) {
+        if (contactCount >= 10 || prefs.getBoolean(KEY_SCAN_DISMISSED, false)) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        long firstSeenAt = prefs.getLong(KEY_SCAN_FIRST_SEEN_AT, 0L);
+        if (firstSeenAt <= 0L) {
+            firstSeenAt = now;
+            prefs.edit().putLong(KEY_SCAN_FIRST_SEEN_AT, firstSeenAt).apply();
+        }
+        if (now - firstSeenAt > SCAN_PROMPT_WINDOW_MS) {
+            prefs.edit().putBoolean(KEY_SCAN_DISMISSED, true).apply();
+            return false;
+        }
+        long lastPromptAt = prefs.getLong(KEY_SCAN_LAST_PROMPT_AT, 0L);
+        if (now - lastPromptAt < SCAN_PROMPT_INTERVAL_MS) {
+            return false;
+        }
+        prefs.edit().putLong(KEY_SCAN_LAST_PROMPT_AT, now).apply();
+        return true;
+    }
+}
