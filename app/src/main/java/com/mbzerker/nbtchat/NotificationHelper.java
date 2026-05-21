@@ -11,7 +11,7 @@ import android.os.Build;
 
 public final class NotificationHelper {
     private static final String REQUEST_CHANNEL_ID = "bluetooth_requests";
-    private static final String ONLINE_CHANNEL_ID = "bluetooth_online";
+    private static final String BACKGROUND_CHANNEL_ID = "bluetooth_background_silent";
     private static final String MESSAGE_CHANNEL_ID = "chat_messages";
     private static final int REQUEST_NOTIFICATION_ID = 42;
     public static final int ONLINE_NOTIFICATION_ID = 73;
@@ -32,13 +32,16 @@ public final class NotificationHelper {
         channel.setDescription("Avisos quando outro nBTChat tenta se conectar.");
         manager.createNotificationChannel(channel);
 
-        NotificationChannel onlineChannel = new NotificationChannel(
-                ONLINE_CHANNEL_ID,
-                "nBTChat online",
-                NotificationManager.IMPORTANCE_LOW
+        NotificationChannel backgroundChannel = new NotificationChannel(
+                BACKGROUND_CHANNEL_ID,
+                "nBTChat em segundo plano",
+                NotificationManager.IMPORTANCE_MIN
         );
-        onlineChannel.setDescription("Mantem o Bluetooth escutando mensagens em segundo plano.");
-        manager.createNotificationChannel(onlineChannel);
+        backgroundChannel.setDescription("Mantem o Bluetooth escutando mensagens sem som.");
+        backgroundChannel.setShowBadge(false);
+        backgroundChannel.enableVibration(false);
+        backgroundChannel.setSound(null, null);
+        manager.createNotificationChannel(backgroundChannel);
 
         NotificationChannel messageChannel = new NotificationChannel(
                 MESSAGE_CHANNEL_ID,
@@ -76,7 +79,7 @@ public final class NotificationHelper {
         manager.notify(REQUEST_NOTIFICATION_ID, notification);
     }
 
-    public static android.app.Notification buildOnlineNotification(Context context) {
+    public static android.app.Notification buildBackgroundNotification(Context context) {
         Intent openIntent = new Intent(context, MainActivity.class);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent pendingIntent = PendingIntent.getActivity(
@@ -86,12 +89,16 @@ public final class NotificationHelper {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        return new android.app.Notification.Builder(context, ONLINE_CHANNEL_ID)
+        return new android.app.Notification.Builder(context, BACKGROUND_CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle("nBTChat online")
-                .setContentText("Aguardando mensagens Bluetooth.")
+                .setContentTitle("nBTChat")
+                .setContentText("Bluetooth ativo para mensagens.")
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
+                .setLocalOnly(true)
+                .setShowWhen(false)
+                .setDefaults(0)
+                .setPriority(android.app.Notification.PRIORITY_MIN)
                 .build();
     }
 

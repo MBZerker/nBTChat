@@ -20,6 +20,7 @@ public final class MessageStore {
     public static final String EXTRA_KIND = "kind";
     public static final String EXTRA_SENT_AT = "sentAt";
     public static final String EXTRA_STATUS = "status";
+    public static final String EXTRA_DELETED = "deleted";
     public static final String EXTRA_UNREAD = "unread";
     public static final String KIND_TEXT = "text";
     public static final String KIND_IMAGE = "image";
@@ -48,6 +49,12 @@ public final class MessageStore {
 
     public synchronized boolean addMessage(String address, String id, String kind, String body, String mediaBase64,
                                            long durationMs, boolean mine, long sentAt, String status, boolean incrementUnread) {
+        return addMessage(address, id, kind, body, mediaBase64, durationMs, mine, sentAt, status, incrementUnread, "", "");
+    }
+
+    public synchronized boolean addMessage(String address, String id, String kind, String body, String mediaBase64,
+                                           long durationMs, boolean mine, long sentAt, String status, boolean incrementUnread,
+                                           String replyToId, String replyPreview) {
         if (address == null || address.trim().isEmpty() || id == null || id.trim().isEmpty()) {
             return false;
         }
@@ -69,6 +76,8 @@ public final class MessageStore {
             message.put("mine", mine);
             message.put("sentAt", sentAt);
             message.put("status", clean(status, mine ? STATUS_PENDING : STATUS_DELIVERED));
+            message.put("replyToId", clean(replyToId, ""));
+            message.put("replyPreview", clean(replyPreview, ""));
             messages.put(message);
             while (messages.length() > MAX_MESSAGES_PER_CHAT) {
                 JSONArray trimmed = new JSONArray();
@@ -116,6 +125,29 @@ public final class MessageStore {
         metaPrefs.edit().remove(KEY_UNREAD_PREFIX + address).apply();
     }
 
+    public synchronized void deleteMessage(String address, String id) {
+        if (address == null || address.trim().isEmpty() || id == null || id.trim().isEmpty()) {
+            return;
+        }
+        try {
+            JSONArray messages = rawMessages(address);
+            JSONArray kept = new JSONArray();
+            boolean changed = false;
+            for (int i = 0; i < messages.length(); i++) {
+                JSONObject item = messages.getJSONObject(i);
+                if (id.equals(item.optString("id", ""))) {
+                    changed = true;
+                    continue;
+                }
+                kept.put(item);
+            }
+            if (changed) {
+                messagePrefs.edit().putString(address, kept.toString()).apply();
+            }
+        } catch (JSONException ignored) {
+        }
+    }
+
     public synchronized List<ChatMessage> loadMessages(String address) {
         List<ChatMessage> messages = new ArrayList<>();
         if (address == null || address.trim().isEmpty()) {
@@ -133,7 +165,9 @@ public final class MessageStore {
                         item.optLong("durationMs", 0L),
                         item.optBoolean("mine", false),
                         item.optLong("sentAt", 0L),
-                        item.optString("status", item.optBoolean("mine", false) ? STATUS_SENT : STATUS_DELIVERED)
+                        item.optString("status", item.optBoolean("mine", false) ? STATUS_SENT : STATUS_DELIVERED),
+                        item.optString("replyToId", ""),
+                        item.optString("replyPreview", "")
                 ));
             }
         } catch (JSONException ignored) {
@@ -255,9 +289,11 @@ public final class MessageStore {
         public final boolean mine;
         public final long sentAt;
         public final String status;
+        public final String replyToId;
+        public final String replyPreview;
 
         ChatMessage(String id, String kind, String body, String mediaBase64, long durationMs,
-                    boolean mine, long sentAt, String status) {
+                    boolean mine, long sentAt, String status, String replyToId, String replyPreview) {
             this.id = id;
             this.kind = kind;
             this.body = body;
@@ -266,6 +302,8 @@ public final class MessageStore {
             this.mine = mine;
             this.sentAt = sentAt;
             this.status = status;
+            this.replyToId = replyToId;
+            this.replyPreview = replyPreview;
         }
     }
 

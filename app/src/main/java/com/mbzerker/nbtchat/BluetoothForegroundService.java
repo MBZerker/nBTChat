@@ -20,7 +20,7 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         messageStore = new MessageStore(this);
         btChatManager = new BtChatManager(this, this);
         NotificationHelper.ensureChannels(this);
-        startForeground(NotificationHelper.ONLINE_NOTIFICATION_ID, NotificationHelper.buildOnlineNotification(this));
+        startForeground(NotificationHelper.ONLINE_NOTIFICATION_ID, NotificationHelper.buildBackgroundNotification(this));
         btChatManager.startListening();
     }
 
@@ -85,14 +85,14 @@ public final class BluetoothForegroundService extends Service implements BtChatM
     }
 
     @Override
-    public void onMessageReceived(String remoteAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
+    public void onMessageReceived(String remoteAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) {
         String address = remoteAddress == null ? currentRemoteAddress : remoteAddress;
         if (address == null || address.trim().isEmpty()) {
             return;
         }
         UserProfile profile = profileStore.loadContact(address);
         String remoteName = profile.isComplete() ? profile.getDisplayName() : "nBTChat";
-        boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, true);
+        boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, true, replyToId, replyPreview);
         if (!inserted) {
             return;
         }
@@ -108,6 +108,18 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         changed.putExtra(MessageStore.EXTRA_KIND, kind);
         changed.putExtra(MessageStore.EXTRA_SENT_AT, sentAt);
         changed.putExtra(MessageStore.EXTRA_UNREAD, unread);
+        sendBroadcast(changed);
+    }
+
+    @Override
+    public void onMessageDeleted(String remoteAddress, String id) {
+        String address = remoteAddress == null ? currentRemoteAddress : remoteAddress;
+        messageStore.deleteMessage(address, id);
+        Intent changed = new Intent(MessageStore.ACTION_MESSAGES_CHANGED);
+        changed.setPackage(getPackageName());
+        changed.putExtra(MessageStore.EXTRA_ADDRESS, address);
+        changed.putExtra(MessageStore.EXTRA_MESSAGE_ID, id);
+        changed.putExtra(MessageStore.EXTRA_DELETED, true);
         sendBroadcast(changed);
     }
 

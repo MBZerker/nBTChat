@@ -111,6 +111,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final Map<String, VoiceControls> voiceControls = new LinkedHashMap<>();
     private final Set<String> renderedMessageIds = new HashSet<>();
     private final List<PendingOutgoing> pendingOutgoing = new ArrayList<>();
+    private final List<PendingDelete> pendingDeletes = new ArrayList<>();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
     private ProfileStore profileStore;
@@ -136,6 +137,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private UserProfile currentRemoteProfile = UserProfile.empty();
     private String currentFingerprint = "";
     private String currentScreen = "";
+    private String pendingReplyAddress = "";
+    private String pendingReplyId = "";
+    private String pendingReplyPreview = "";
+    private View replyPreviewBar;
     private boolean messageReceiverRegistered;
     private boolean updateAvailable;
     private String updateVersionName = "";
@@ -146,6 +151,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String playingVoiceId = "";
     private VoiceControls playingVoiceControls;
     private Runnable voiceTicker;
+    private long lastDiscoverableRequestAt;
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -156,7 +162,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             String address = intent.getStringExtra(MessageStore.EXTRA_ADDRESS);
             String id = intent.getStringExtra(MessageStore.EXTRA_MESSAGE_ID);
             String status = intent.getStringExtra(MessageStore.EXTRA_STATUS);
-            handleStoredMessageChange(address, id, status);
+            boolean deleted = intent.getBooleanExtra(MessageStore.EXTRA_DELETED, false);
+            handleStoredMessageChange(address, id, status, deleted);
         }
     };
 
@@ -268,6 +275,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             addIfMissing(missing, Manifest.permission.BLUETOOTH_SCAN);
             addIfMissing(missing, Manifest.permission.BLUETOOTH_CONNECT);
+            addIfMissing(missing, Manifest.permission.BLUETOOTH_ADVERTISE);
         } else {
             addIfMissing(missing, Manifest.permission.ACCESS_FINE_LOCATION);
         }
@@ -525,6 +533,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         Button scanButton = pillButton("Escanear aparelhos proximos", accent(), darkMode ? "#12171D" : "#17212B");
         scanButton.setOnClickListener(v -> {
+            requestDiscoverableForScanner();
             discoveredDevices.clear();
             renderNearbyDeviceList();
             btChatManager.startNearbyDiscovery();
@@ -547,6 +556,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         setContentView(root);
         requestInsets(root);
+        root.postDelayed(this::requestDiscoverableForScanner, 250);
 
         if (autoStart) {
             discoveredDevices.clear();
@@ -554,6 +564,25 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             root.postDelayed(() -> btChatManager.startNearbyDiscovery(), 200);
         } else {
             renderNearbyDeviceList();
+        }
+    }
+
+    private void requestDiscoverableForScanner() {
+        if (!"scanner".equals(currentScreen) || isFinishing()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastDiscoverableRequestAt < 110_000L) {
+            return;
+        }
+        lastDiscoverableRequestAt = now;
+        try {
+            Intent discoverable = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+            discoverable.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120);
+            startActivity(discoverable);
+            showState("Seu aparelho ficara visivel por ate 2 minutos.");
+        } catch (Exception ex) {
+            showState("Nao foi possivel pedir visibilidade Bluetooth.");
         }
     }
 
@@ -769,6 +798,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         currentScreen = "chat";
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         currentFingerprint = fingerprint == null ? "" : fingerprint;
+        replyPreviewBar = null;
 
         LinearLayout root = vertical();
         root.setBackgroundColor(color(chatBackground()));
@@ -811,6 +841,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.sendReceipt(currentRemoteAddress, id, MessageStore.STATUS_READ);
         }
         renderChatHistory(true);
+
+        addReplyPreviewBar(root);
 
         LinearLayout composer = horizontal();
         composer.setGravity(Gravity.BOTTOM);
@@ -866,6 +898,31 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         popup.setOutsideTouchable(true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.showAsDropDown(anchor, 0, -dp(238));
+    }
+
+    private void addReplyPreviewBar(LinearLayout root) {
+        if (pendingReplyId.isEmpty() || !currentRemoteAddress.equals(pendingReplyAddress)) {
+            return;
+        }
+        LinearLayout bar = horizontal();
+        replyPreviewBar = bar;
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(12), dp(9), dp(8), dp(9));
+        bar.setBackground(rounded(darkMode ? "#1C2C2B" : "#DFF4EC", dp(14), "#16A34A"));
+
+        LinearLayout texts = vertical();
+        texts.addView(text("Respondendo", 12, "#16A34A", Typeface.BOLD));
+        TextView preview = text(pendingReplyPreview, 14, primary(), Typeface.NORMAL);
+        preview.setSingleLine(true);
+        texts.addView(preview);
+        bar.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        bar.addView(iconButton(R.drawable.ic_close_24, "Cancelar resposta", dp(38), v -> {
+            clearPendingReply();
+            showChatScreen(currentRemoteProfile, currentFingerprint);
+        }));
+        LinearLayout.LayoutParams params = topMargin(dp(4));
+        params.setMargins(0, dp(4), 0, dp(4));
+        root.addView(bar, params);
     }
 
     private void showContactInfoDialog() {
@@ -991,6 +1048,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         dialog.show();
     }
 
+    private String activeReplyId() {
+        return currentRemoteAddress.equals(pendingReplyAddress) ? pendingReplyId : "";
+    }
+
+    private String activeReplyPreview() {
+        return currentRemoteAddress.equals(pendingReplyAddress) ? pendingReplyPreview : "";
+    }
+
+    private void clearPendingReply() {
+        pendingReplyAddress = "";
+        pendingReplyId = "";
+        pendingReplyPreview = "";
+        if (replyPreviewBar != null) {
+            ViewGroup parent = (ViewGroup) replyPreviewBar.getParent();
+            if (parent != null) {
+                parent.removeView(replyPreviewBar);
+            }
+            replyPreviewBar = null;
+        }
+    }
+
     private void sendCurrentMessage() {
         if (messageInput == null) {
             return;
@@ -1005,9 +1083,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         messageInput.setText("");
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
-        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_TEXT, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
-        addMessageBubble(id, body, true, MessageStore.KIND_TEXT, "", 0L, MessageStore.STATUS_PENDING, true);
-        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_TEXT, body, "", 0L, sentAt);
+        String replyToId = activeReplyId();
+        String replyPreview = activeReplyPreview();
+        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_TEXT, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
+        addMessageBubble(id, body, true, MessageStore.KIND_TEXT, "", 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_TEXT, body, "", 0L, sentAt, replyToId, replyPreview);
+        clearPendingReply();
     }
 
     private boolean ensureCanSendMedia() {
@@ -1031,9 +1112,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
-        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_IMAGE, "", imageBase64, 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
-        addMessageBubble(id, "", true, MessageStore.KIND_IMAGE, imageBase64, 0L, MessageStore.STATUS_PENDING, true);
-        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_IMAGE, "", imageBase64, 0L, sentAt);
+        String replyToId = activeReplyId();
+        String replyPreview = activeReplyPreview();
+        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_IMAGE, "", imageBase64, 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
+        addMessageBubble(id, "", true, MessageStore.KIND_IMAGE, imageBase64, 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_IMAGE, "", imageBase64, 0L, sentAt, replyToId, replyPreview);
+        clearPendingReply();
     }
 
     private void sendVoiceMessage(String audioBase64, long durationMs) {
@@ -1042,15 +1126,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
-        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_VOICE, "", audioBase64, durationMs, true, sentAt, MessageStore.STATUS_PENDING, false);
-        addMessageBubble(id, "", true, MessageStore.KIND_VOICE, audioBase64, durationMs, MessageStore.STATUS_PENDING, true);
-        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_VOICE, "", audioBase64, durationMs, sentAt);
+        String replyToId = activeReplyId();
+        String replyPreview = activeReplyPreview();
+        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_VOICE, "", audioBase64, durationMs, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
+        addMessageBubble(id, "", true, MessageStore.KIND_VOICE, audioBase64, durationMs, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_VOICE, "", audioBase64, durationMs, sentAt, replyToId, replyPreview);
+        clearPendingReply();
     }
 
     private void sendOrQueueOutgoing(String address, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
-        PendingOutgoing outgoing = new PendingOutgoing(address, id, kind, body, mediaBase64, durationMs, sentAt);
+        sendOrQueueOutgoing(address, id, kind, body, mediaBase64, durationMs, sentAt, "", "");
+    }
+
+    private void sendOrQueueOutgoing(String address, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) {
+        PendingOutgoing outgoing = new PendingOutgoing(address, id, kind, body, mediaBase64, durationMs, sentAt, replyToId, replyPreview);
         if (btChatManager.canSendTo(address)) {
-            btChatManager.sendChatMessage(address, id, kind, body, mediaBase64, durationMs, sentAt);
+            btChatManager.sendChatMessage(address, id, kind, body, mediaBase64, durationMs, sentAt, replyToId, replyPreview);
             return;
         }
         pendingOutgoing.add(outgoing);
@@ -1059,17 +1150,42 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void flushPendingOutgoing(String address) {
-        if (address == null || address.isEmpty() || pendingOutgoing.isEmpty() || !btChatManager.canSendTo(address)) {
+        if (address == null || address.isEmpty() || !btChatManager.canSendTo(address)) {
             return;
         }
-        List<PendingOutgoing> sent = new ArrayList<>();
-        for (PendingOutgoing outgoing : pendingOutgoing) {
-            if (address.equals(outgoing.address)) {
-                btChatManager.sendChatMessage(outgoing.address, outgoing.id, outgoing.kind, outgoing.body, outgoing.mediaBase64, outgoing.durationMs, outgoing.sentAt);
-                sent.add(outgoing);
+        if (!pendingOutgoing.isEmpty()) {
+            List<PendingOutgoing> sent = new ArrayList<>();
+            for (PendingOutgoing outgoing : pendingOutgoing) {
+                if (address.equals(outgoing.address)) {
+                    btChatManager.sendChatMessage(outgoing.address, outgoing.id, outgoing.kind, outgoing.body, outgoing.mediaBase64, outgoing.durationMs, outgoing.sentAt, outgoing.replyToId, outgoing.replyPreview);
+                    sent.add(outgoing);
+                }
             }
+            pendingOutgoing.removeAll(sent);
         }
-        pendingOutgoing.removeAll(sent);
+        if (!pendingDeletes.isEmpty()) {
+            List<PendingDelete> sentDeletes = new ArrayList<>();
+            for (PendingDelete delete : pendingDeletes) {
+                if (address.equals(delete.address)) {
+                    btChatManager.sendDeleteMessage(delete.address, delete.id);
+                    sentDeletes.add(delete);
+                }
+            }
+            pendingDeletes.removeAll(sentDeletes);
+        }
+    }
+
+    private void sendOrQueueDelete(String address, String id) {
+        if (address == null || address.isEmpty() || id == null || id.isEmpty()) {
+            return;
+        }
+        if (btChatManager.canSendTo(address)) {
+            btChatManager.sendDeleteMessage(address, id);
+            return;
+        }
+        pendingDeletes.add(new PendingDelete(address, id));
+        connectForAddress(address);
+        Toast.makeText(this, "Vou apagar para todos assim que o Bluetooth conectar.", Toast.LENGTH_SHORT).show();
     }
 
     private void connectForAddress(String address) {
@@ -1313,12 +1429,41 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             addSystemMessage("Conversa criptografada por Bluetooth.");
         } else {
             for (MessageStore.ChatMessage message : history) {
-                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, false);
+                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, message.replyToId, message.replyPreview, false);
             }
         }
         if (scrollBottom) {
             scrollMessagesToBottom();
         }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private void attachMessageGestures(View view, String id) {
+        if (id == null || id.isEmpty()) {
+            return;
+        }
+        final float[] downX = new float[1];
+        final float[] downY = new float[1];
+        view.setOnLongClickListener(v -> {
+            showMessageActionDialog(id);
+            return true;
+        });
+        view.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                downX[0] = event.getX();
+                downY[0] = event.getY();
+                return false;
+            }
+            if (event.getAction() == MotionEvent.ACTION_UP) {
+                float dx = event.getX() - downX[0];
+                float dy = Math.abs(event.getY() - downY[0]);
+                if (Math.abs(dx) > dp(72) && dy < dp(36)) {
+                    beginReplyToMessage(id);
+                    return true;
+                }
+            }
+            return false;
+        });
     }
 
     private TextView messageText(String body, boolean mine) {
@@ -1418,14 +1563,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void addMessageBubble(String body, boolean mine) {
-        addMessageBubble("", body, mine, MessageStore.KIND_TEXT, "", 0L, mine ? MessageStore.STATUS_SENT : MessageStore.STATUS_DELIVERED, true);
+        addMessageBubble("", body, mine, MessageStore.KIND_TEXT, "", 0L, mine ? MessageStore.STATUS_SENT : MessageStore.STATUS_DELIVERED, "", "", true);
     }
 
     private void addMessageBubble(String body, boolean mine, String kind, String mediaBase64, long durationMs, String status) {
-        addMessageBubble("", body, mine, kind, mediaBase64, durationMs, status, true);
+        addMessageBubble("", body, mine, kind, mediaBase64, durationMs, status, "", "", true);
     }
 
-    private void addMessageBubble(String id, String body, boolean mine, String kind, String mediaBase64, long durationMs, String status, boolean scrollBottom) {
+    private void addMessageBubble(String id, String body, boolean mine, String kind, String mediaBase64, long durationMs, String status, String replyToId, String replyPreview, boolean scrollBottom) {
         if (messageList == null) {
             showChatScreen(currentRemoteProfile, currentFingerprint);
         }
@@ -1438,10 +1583,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout bubble = vertical();
         bubble.setPadding(dp(13), dp(9), dp(13), dp(8));
         bubble.setBackground(rounded(mine ? "#0F766E" : surface(), dp(16), mine ? "#0F766E" : border()));
-        bubble.setOnLongClickListener(v -> {
-            showMessageActionDialog(id);
-            return true;
-        });
+        attachMessageGestures(bubble, id);
+
+        if (replyPreview != null && !replyPreview.trim().isEmpty()) {
+            TextView reply = text(replyPreview, 13, mine ? "#D7FBE8" : secondary(), Typeface.BOLD);
+            reply.setSingleLine(true);
+            reply.setPadding(dp(8), dp(6), dp(8), dp(6));
+            reply.setBackground(rounded(mine ? "#0C5F58" : surfaceAlt(), dp(10), mine ? "#0C5F58" : border()));
+            attachMessageGestures(reply, id);
+            bubble.addView(reply, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
 
         if (MessageStore.KIND_IMAGE.equals(kind) && mediaBase64 != null && !mediaBase64.isEmpty()) {
             ImageView image = new ImageView(this);
@@ -1451,13 +1602,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 image.setImageBitmap(bitmap);
             }
             image.setOnClickListener(v -> showFullscreenImage(mediaBase64));
+            attachMessageGestures(image, id);
             bubble.addView(image, new LinearLayout.LayoutParams(dp(210), dp(150)));
             if (body != null && !body.isEmpty()) {
-                bubble.addView(messageText(body, mine), topMargin(dp(6)));
+                TextView caption = messageText(body, mine);
+                attachMessageGestures(caption, id);
+                bubble.addView(caption, topMargin(dp(6)));
             }
         } else if (MessageStore.KIND_VOICE.equals(kind)) {
             LinearLayout voiceRow = horizontal();
             voiceRow.setGravity(Gravity.CENTER_VERTICAL);
+            attachMessageGestures(voiceRow, id);
             ImageButton play = iconButton(R.drawable.ic_play_24, "Tocar audio", dp(42), null);
             SeekBar seekBar = new SeekBar(this);
             TextView time = text("00:00/" + formatDuration(durationMs), 12, mine ? "#D7FBE8" : secondary(), Typeface.BOLD);
@@ -1488,7 +1643,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             voiceRow.addView(time, leftMargin(dp(4), LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
             bubble.addView(voiceRow);
         } else {
-            bubble.addView(messageText(body, mine));
+            TextView content = messageText(body, mine);
+            attachMessageGestures(content, id);
+            bubble.addView(content);
         }
         if (mine) {
             TextView receipt = text(statusIcon(status), 11, statusColor(status), Typeface.BOLD);
@@ -1618,18 +1775,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     @Override
-    public void onMessageReceived(String remoteAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
+    public void onMessageReceived(String remoteAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) {
         String address = remoteAddress == null ? "" : remoteAddress;
         if (address.isEmpty()) {
             return;
         }
         boolean activeChat = "chat".equals(currentScreen) && address.equals(currentRemoteAddress);
-        boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, !activeChat);
+        boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, !activeChat, replyToId, replyPreview);
         if (activeChat) {
             messageStore.markRead(address);
             btChatManager.sendReceipt(address, id, MessageStore.STATUS_READ);
             if (inserted) {
-                addMessageBubble(id, body, false, kind, mediaBase64, durationMs, MessageStore.STATUS_DELIVERED, true);
+                addMessageBubble(id, body, false, kind, mediaBase64, durationMs, MessageStore.STATUS_DELIVERED, replyToId, replyPreview, true);
             }
         } else if ("home".equals(currentScreen)) {
             renderContactList();
@@ -1652,6 +1809,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     @Override
+    public void onMessageDeleted(String remoteAddress, String id) {
+        String address = remoteAddress == null || remoteAddress.isEmpty() ? currentRemoteAddress : remoteAddress;
+        messageStore.deleteMessage(address, id);
+        if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+            renderChatHistory(false);
+        } else if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
+    }
+
+    @Override
     public void onError(String message) {
         showState(message);
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
@@ -1663,8 +1831,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
-    private void handleStoredMessageChange(String address, String id, String status) {
+    private void handleStoredMessageChange(String address, String id, String status, boolean deleted) {
         if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        if (deleted) {
+            if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+                renderChatHistory(false);
+            } else if ("home".equals(currentScreen)) {
+                renderContactList();
+            }
             return;
         }
         if (status != null && !status.trim().isEmpty()) {
@@ -1678,7 +1854,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             MessageStore.ChatMessage message = messageStore.findMessage(address, id);
             if (message != null) {
-                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, true);
+                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, message.replyToId, message.replyPreview, true);
             }
         } else if ("home".equals(currentScreen)) {
             renderContactList();
@@ -1794,22 +1970,70 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         List<String> actions = new ArrayList<>();
-        if (MessageStore.KIND_TEXT.equals(message.kind) && message.body != null && !message.body.trim().isEmpty()) {
-            actions.add("Copiar texto");
-        }
-        actions.add("Compartilhar no nBTChat");
-        actions.add("Cancelar");
+        actions.add("Copiar");
+        actions.add("Compartilhar");
+        actions.add("Remover");
+        actions.add("Responder");
         new AlertDialog.Builder(this)
                 .setTitle("Mensagem selecionada")
                 .setItems(actions.toArray(new String[0]), (dialog, which) -> {
                     String action = actions.get(which);
-                    if ("Copiar texto".equals(action)) {
-                        copyMessageText(message.body);
-                    } else if ("Compartilhar no nBTChat".equals(action)) {
+                    if ("Copiar".equals(action)) {
+                        if (MessageStore.KIND_TEXT.equals(message.kind) && message.body != null && !message.body.trim().isEmpty()) {
+                            copyMessageText(message.body);
+                        } else {
+                            Toast.makeText(this, "Esta mensagem nao tem texto para copiar.", Toast.LENGTH_SHORT).show();
+                        }
+                    } else if ("Compartilhar".equals(action)) {
                         showInternalShareChooser(message);
+                    } else if ("Remover".equals(action)) {
+                        showRemoveMessageDialog(message);
+                    } else if ("Responder".equals(action)) {
+                        beginReplyToMessage(message.id);
                     }
                 })
                 .show();
+    }
+
+    private void showRemoveMessageDialog(MessageStore.ChatMessage message) {
+        new AlertDialog.Builder(this)
+                .setTitle("Remover mensagem")
+                .setItems(new String[]{"Apagar para todos", "Apagar so para mim", "Cancelar"}, (dialog, which) -> {
+                    if (which == 0) {
+                        deleteMessageForEveryone(message.id);
+                    } else if (which == 1) {
+                        deleteMessageForMe(message.id);
+                    }
+                })
+                .show();
+    }
+
+    private void deleteMessageForMe(String id) {
+        messageStore.deleteMessage(currentRemoteAddress, id);
+        renderChatHistory(false);
+        if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
+    }
+
+    private void deleteMessageForEveryone(String id) {
+        messageStore.deleteMessage(currentRemoteAddress, id);
+        renderChatHistory(false);
+        sendOrQueueDelete(currentRemoteAddress, id);
+    }
+
+    private void beginReplyToMessage(String id) {
+        MessageStore.ChatMessage message = messageStore.findMessage(currentRemoteAddress, id);
+        if (message == null) {
+            return;
+        }
+        pendingReplyAddress = currentRemoteAddress;
+        pendingReplyId = id;
+        pendingReplyPreview = messagePreview(message);
+        showChatScreen(currentRemoteProfile, currentFingerprint);
+        if (messageInput != null) {
+            messageInput.requestFocus();
+        }
     }
 
     private void copyMessageText(String body) {
@@ -1818,6 +2042,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             clipboard.setPrimaryClip(ClipData.newPlainText("nBTChat", body == null ? "" : body));
             Toast.makeText(this, "Texto copiado.", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private String messagePreview(MessageStore.ChatMessage message) {
+        if (message == null) {
+            return "";
+        }
+        if (MessageStore.KIND_IMAGE.equals(message.kind)) {
+            return message.mine ? "Voce enviou uma imagem" : "Imagem";
+        }
+        if (MessageStore.KIND_VOICE.equals(message.kind)) {
+            return message.mine ? "Voce enviou uma mensagem de voz" : "Mensagem de voz";
+        }
+        String body = message.body == null ? "" : message.body.trim();
+        if (body.length() > 80) {
+            return body.substring(0, 77) + "...";
+        }
+        return body;
     }
 
     private void showInternalShareChooser(MessageStore.ChatMessage source) {
@@ -2121,8 +2362,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         final String mediaBase64;
         final long durationMs;
         final long sentAt;
+        final String replyToId;
+        final String replyPreview;
 
-        PendingOutgoing(String address, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
+        PendingOutgoing(String address, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) {
             this.address = address;
             this.id = id;
             this.kind = kind;
@@ -2130,6 +2373,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             this.mediaBase64 = mediaBase64;
             this.durationMs = durationMs;
             this.sentAt = sentAt;
+            this.replyToId = replyToId == null ? "" : replyToId;
+            this.replyPreview = replyPreview == null ? "" : replyPreview;
+        }
+    }
+
+    private static final class PendingDelete {
+        final String address;
+        final String id;
+
+        PendingDelete(String address, String id) {
+            this.address = address;
+            this.id = id;
         }
     }
 

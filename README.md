@@ -10,6 +10,7 @@ Aplicativo Android de chat local via Bluetooth, sem servidor e sem internet.
 - Tela principal em formato de lista de contatos/conversas.
 - Busca de aparelhos pareados que anunciam o servico Bluetooth do nBTChat.
 - Tela de encontrar aparelhos proximos para contas novas ou convite de novos contatos.
+- Ao entrar na tela de encontrar aparelhos, o Android e solicitado a deixar o celular visivel por ate 2 minutos.
 - Conexao Bluetooth Classic RFCOMM entre dois aparelhos com o app aberto.
 - Handshake de perfil e chave ECDH P-256.
 - Mensagens criptografadas com AES-GCM depois do handshake.
@@ -21,7 +22,10 @@ Aplicativo Android de chat local via Bluetooth, sem servidor e sem internet.
 - Recibos de envio, entrega e leitura.
 - Ponte Bluetooth privada por pacote selado para encaminhar mensagens entre aparelhos conhecidos sem expor o conteudo ao intermediario.
 - Compartilhamento interno de mensagens entre contatos do nBTChat.
+- Resposta a mensagens por menu de selecao ou arraste lateral do balao.
+- Remocao de mensagem so para mim ou para todos.
 - Notificacoes de mensagens recebidas com o app fechado, usando servico em primeiro plano.
+- Notificacao de segundo plano reduzida para canal silencioso/minimo; o Android ainda pode exibir indicador do servico.
 - Menu com edicao de perfil, configuracoes, compartilhamento do app, alternancia claro/escuro e apagamento de conversa no chat.
 - Configuracao para ativar/desativar notificacoes de mensagens.
 - Verificacao de atualizacao via `docs/update.json`.

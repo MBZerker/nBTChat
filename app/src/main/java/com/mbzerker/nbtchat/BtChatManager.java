@@ -51,9 +51,11 @@ public final class BtChatManager {
 
         void onRemoteIdentity(String remoteAddress, String deviceId, String identityPublicKey);
 
-        void onMessageReceived(String remoteAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt);
+        void onMessageReceived(String remoteAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview);
 
         void onReceiptReceived(String remoteAddress, String id, String status);
+
+        void onMessageDeleted(String remoteAddress, String id);
 
         void onError(String message);
     }
@@ -245,16 +247,27 @@ public final class BtChatManager {
     }
 
     public void sendMessage(String body) {
-        sendChatMessage("", Long.toString(System.currentTimeMillis()), MessageStore.KIND_TEXT, body, "", 0L, System.currentTimeMillis());
+        sendChatMessage("", Long.toString(System.currentTimeMillis()), MessageStore.KIND_TEXT, body, "", 0L, System.currentTimeMillis(), "", "");
     }
 
     public void sendChatMessage(String destinationAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
+        sendChatMessage(destinationAddress, id, kind, body, mediaBase64, durationMs, sentAt, "", "");
+    }
+
+    public void sendChatMessage(String destinationAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) {
         ConnectedThread thread = connectedThread;
         if (thread == null) {
             postError("Nenhuma conversa conectada.");
             return;
         }
-        thread.sendChatMessage(destinationAddress, id, kind, body, mediaBase64, durationMs, sentAt);
+        thread.sendChatMessage(destinationAddress, id, kind, body, mediaBase64, durationMs, sentAt, replyToId, replyPreview);
+    }
+
+    public void sendDeleteMessage(String destinationAddress, String messageId) {
+        ConnectedThread thread = connectedThread;
+        if (thread != null) {
+            thread.sendDeleteMessage(destinationAddress, messageId);
+        }
     }
 
     public void sendReceipt(String destinationAddress, String messageId, String status) {
@@ -583,6 +596,8 @@ public final class BtChatManager {
                         handlePlainMessage(plain);
                     } else if ("receipt".equals(type)) {
                         handleReceipt(plain);
+                    } else if ("delete".equals(type)) {
+                        handleDelete(plain);
                     } else if ("sealed".equals(type)) {
                         handleSealed(plain);
                     } else if ("profile".equals(type)) {
@@ -605,7 +620,7 @@ public final class BtChatManager {
             }
         }
 
-        void sendChatMessage(String destinationAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
+        void sendChatMessage(String destinationAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) {
             if ((body == null || body.trim().isEmpty()) && (mediaBase64 == null || mediaBase64.trim().isEmpty())) {
                 return;
             }
@@ -615,7 +630,7 @@ public final class BtChatManager {
             }
             new Thread(() -> {
                 try {
-                    JSONObject message = messageJson(id, kind, body, mediaBase64, durationMs, sentAt);
+                    JSONObject message = messageJson(id, kind, body, mediaBase64, durationMs, sentAt, replyToId, replyPreview);
                     JSONObject outgoing = wrapForDestination(destinationAddress, message);
                     writeFrame(cryptoSession.encrypt(outgoing).toString());
                     mainHandler.post(() -> listener.onReceiptReceived(destinationAddress == null || destinationAddress.isEmpty() ? remoteAddress : destinationAddress, id, MessageStore.STATUS_SENT));
@@ -623,6 +638,26 @@ public final class BtChatManager {
                     postError("Nao foi possivel enviar a mensagem: " + ex.getMessage());
                 }
             }, "nBTChat-send").start();
+        }
+
+        void sendDeleteMessage(String destinationAddress, String messageId) {
+            if (messageId == null || messageId.isEmpty() || cryptoSession == null) {
+                return;
+            }
+            new Thread(() -> {
+                try {
+                    JSONObject delete = new JSONObject();
+                    delete.put("type", "delete");
+                    delete.put("id", messageId);
+                    delete.put("sentAt", System.currentTimeMillis());
+                    delete.put("sourceDeviceId", identityStore.getDeviceId());
+                    delete.put("sourceIdentityPublicKey", identityStore.getPublicKeyBase64());
+                    delete.put("sourceProfile", profileStore.loadLocalProfile().toJson());
+                    writeFrame(cryptoSession.encrypt(wrapForDestination(destinationAddress, delete)).toString());
+                } catch (Exception ex) {
+                    postError("Nao foi possivel apagar para todos: " + ex.getMessage());
+                }
+            }, "nBTChat-delete").start();
         }
 
         void sendReceipt(String destinationAddress, String messageId, String status) {
@@ -662,7 +697,7 @@ public final class BtChatManager {
             }, "nBTChat-profile").start();
         }
 
-        private JSONObject messageJson(String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) throws Exception {
+        private JSONObject messageJson(String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) throws Exception {
             JSONObject plain = new JSONObject();
             plain.put("type", "message");
             plain.put("id", id);
@@ -671,6 +706,8 @@ public final class BtChatManager {
             plain.put("mediaBase64", mediaBase64 == null ? "" : mediaBase64);
             plain.put("durationMs", durationMs);
             plain.put("sentAt", sentAt);
+            plain.put("replyToId", replyToId == null ? "" : replyToId);
+            plain.put("replyPreview", replyPreview == null ? "" : replyPreview);
             plain.put("sourceDeviceId", identityStore.getDeviceId());
             plain.put("sourceIdentityPublicKey", identityStore.getPublicKeyBase64());
             plain.put("sourceProfile", profileStore.loadLocalProfile().toJson());
@@ -712,8 +749,10 @@ public final class BtChatManager {
             String mediaBase64 = plain.optString("mediaBase64", "");
             long durationMs = plain.optLong("durationMs", 0L);
             long sentAt = plain.optLong("sentAt", System.currentTimeMillis());
+            String replyToId = plain.optString("replyToId", "");
+            String replyPreview = plain.optString("replyPreview", "");
             sendReceipt(receiptDestinationAddress, id, MessageStore.STATUS_DELIVERED);
-            mainHandler.post(() -> listener.onMessageReceived(conversationAddress, id, kind, body, mediaBase64, durationMs, sentAt));
+            mainHandler.post(() -> listener.onMessageReceived(conversationAddress, id, kind, body, mediaBase64, durationMs, sentAt, replyToId, replyPreview));
         }
 
         private void handleReceipt(JSONObject receipt) {
@@ -727,6 +766,18 @@ public final class BtChatManager {
                 return;
             }
             mainHandler.post(() -> listener.onReceiptReceived(conversationAddress, id, status));
+        }
+
+        private void handleDelete(JSONObject delete) {
+            processDelete(delete, remoteAddress);
+        }
+
+        private void processDelete(JSONObject delete, String conversationAddress) {
+            String id = delete.optString("id", "");
+            if (id.isEmpty() || conversationAddress == null || conversationAddress.isEmpty()) {
+                return;
+            }
+            mainHandler.post(() -> listener.onMessageDeleted(conversationAddress, id));
         }
 
         private void handleProfileUpdate(JSONObject profileJson) {
@@ -753,6 +804,8 @@ public final class BtChatManager {
                     processMessage(opened, conversationAddress, conversationAddress, "message:" + sourceDeviceId + ":" + opened.optString("id", ""));
                 } else if ("receipt".equals(opened.optString("type"))) {
                     processReceipt(opened, conversationAddress);
+                } else if ("delete".equals(opened.optString("type"))) {
+                    processDelete(opened, conversationAddress);
                 }
                 return;
             }
