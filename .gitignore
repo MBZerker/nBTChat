@@ -16,7 +16,7 @@ captures/
 .cxx/
 *.aab
 *.apk
-!docs/nBTChat.apk
+!docs/*.apk
 output-metadata.json
 
 # IntelliJ
