@@ -43,7 +43,7 @@ APK para link publico:
 docs/nBTChat.apk
 ```
 
-Pagina GitHub Pages esperada:
+Pagina GitHub Pages esperada, depois de ativar Pages em `Settings > Pages > Deploy from a branch > main /docs`:
 
 ```text
 https://mbzerker.github.io/nBTChat/

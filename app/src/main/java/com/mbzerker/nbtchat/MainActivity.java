@@ -103,7 +103,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             "\uD83D\uDE09", "\uD83D\uDE05", "\uD83E\uDD17", "\uD83D\uDE31", "\uD83D\uDC4F", "\uD83E\uDD1D",
             "\uD83D\uDCAA", "\uD83C\uDF7A", "\uD83C\uDFB5", "\uD83D\uDCA1", "\u2705", "\uD83D\uDE80"
     };
-    private static final String UPDATE_MANIFEST_URL = "https://mbzerker.github.io/nBTChat/update.json";
+    private static final String UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/update.json";
     private static final Pattern LINK_PATTERN = Pattern.compile("(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)");
 
     private final Map<String, BtChatManager.DeviceCandidate> discoveredDevices = new LinkedHashMap<>();
@@ -140,7 +140,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private boolean updateAvailable;
     private String updateVersionName = "";
     private String updatePageUrl = "https://mbzerker.github.io/nBTChat/";
-    private String updateApkUrl = "https://mbzerker.github.io/nBTChat/nBTChat.apk";
+    private String updateApkUrl = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat.apk";
     private MediaPlayer playingVoicePlayer;
     private File playingVoiceFile;
     private String playingVoiceId = "";
@@ -1859,7 +1859,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         new AlertDialog.Builder(this)
                 .setTitle("Atualizacao disponivel")
                 .setMessage(updateVersionName.isEmpty() ? "Uma nova versao do nBTChat esta pronta para baixar." : "Versao " + updateVersionName + " disponivel.")
-                .setPositiveButton("Baixar", (dialog, which) -> openExternalLink(Uri.parse(updatePageUrl)))
+                .setPositiveButton("Baixar APK", (dialog, which) -> openExternalLink(Uri.parse(updateApkUrl)))
+                .setNeutralButton("Pagina", (dialog, which) -> openExternalLink(Uri.parse(updatePageUrl)))
                 .setNegativeButton("Agora nao", null)
                 .show();
     }
