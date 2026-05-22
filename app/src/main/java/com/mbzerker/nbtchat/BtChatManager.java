@@ -210,6 +210,31 @@ public final class BtChatManager {
     }
 
     @SuppressLint("MissingPermission")
+    public String localBluetoothName() {
+        if (adapter == null) {
+            return "";
+        }
+        try {
+            return adapter.getName() == null ? "" : adapter.getName();
+        } catch (SecurityException ignored) {
+            return "";
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    public String localBluetoothAddress() {
+        if (adapter == null) {
+            return "";
+        }
+        try {
+            String address = adapter.getAddress();
+            return QrInvite.validBluetoothAddress(address) ? address : "";
+        } catch (SecurityException ignored) {
+            return "";
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     public DeviceCandidate getPairedCandidate(String address) {
         if (adapter == null || address == null || address.trim().isEmpty()) {
             return null;
@@ -227,6 +252,57 @@ public final class BtChatManager {
         } catch (SecurityException ignored) {
         }
         return null;
+    }
+
+    @SuppressLint("MissingPermission")
+    public DeviceCandidate getDirectCandidate(String address, String bluetoothName) {
+        if (adapter == null) {
+            return null;
+        }
+        String cleanAddress = address == null ? "" : address.trim();
+        if (QrInvite.validBluetoothAddress(cleanAddress)) {
+            try {
+                BluetoothDevice device = adapter.getRemoteDevice(cleanAddress);
+                return new DeviceCandidate(device, safeName(device), safeAddress(device), isBonded(device), true);
+            } catch (Exception ignored) {
+            }
+        }
+        String cleanName = bluetoothName == null ? "" : bluetoothName.trim();
+        if (cleanName.isEmpty()) {
+            return null;
+        }
+        try {
+            Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
+            if (bondedDevices == null) {
+                return null;
+            }
+            for (BluetoothDevice device : bondedDevices) {
+                String deviceName = safeName(device);
+                if (cleanName.equalsIgnoreCase(deviceName)) {
+                    return new DeviceCandidate(device, deviceName, safeAddress(device), true, true);
+                }
+            }
+        } catch (SecurityException ignored) {
+        }
+        return null;
+    }
+
+    @SuppressLint("MissingPermission")
+    public void connectDirect(DeviceCandidate candidate) {
+        if (candidate == null || candidate.device == null) {
+            postError("Nao encontrei este aparelho no Bluetooth. Pareie no Android ou deixe o aparelho visivel.");
+            return;
+        }
+        try {
+            if (candidate.device.getBondState() != BluetoothDevice.BOND_BONDED) {
+                candidate.device.createBond();
+                postState("Confirme o pareamento Bluetooth. Vou tentar conectar em seguida.");
+                mainHandler.postDelayed(() -> connect(candidate), 5500);
+                return;
+            }
+        } catch (SecurityException ignored) {
+        }
+        connect(candidate);
     }
 
     @SuppressLint("MissingPermission")

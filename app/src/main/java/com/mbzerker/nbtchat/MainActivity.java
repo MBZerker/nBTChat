@@ -63,6 +63,10 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.QRCodeWriter;
+
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -95,6 +99,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_CAPTURE_PHOTO = 103;
     private static final int REQUEST_PICK_CHAT_IMAGE = 104;
     private static final int REQUEST_CAPTURE_CHAT_IMAGE = 105;
+    private static final int REQUEST_QR_CAMERA = 106;
+    private static final int REQUEST_SCAN_QR = 107;
 
     private static final String[] GENDER_LABELS = {
             "Masculino",
@@ -120,6 +126,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
     private ProfileStore profileStore;
+    private IdentityStore identityStore;
     private MessageStore messageStore;
     private GadgetStore gadgetStore;
     private ThemeStore themeStore;
@@ -188,6 +195,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
 
         profileStore = new ProfileStore(this);
+        identityStore = new IdentityStore(this);
         messageStore = new MessageStore(this);
         gadgetStore = new GadgetStore(this);
         themeStore = new ThemeStore(this);
@@ -232,6 +240,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_PERMISSIONS) {
             tryStartBluetooth();
+        } else if (requestCode == REQUEST_QR_CAMERA
+                && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            openQrScanner();
         }
     }
 
@@ -280,6 +292,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         } else if (requestCode == REQUEST_CAPTURE_CHAT_IMAGE) {
             pendingCameraUri = null;
+        } else if (requestCode == REQUEST_SCAN_QR && resultCode == RESULT_OK && data != null) {
+            handleQrInvite(data.getStringExtra(QrScannerActivity.EXTRA_QR_TEXT));
         }
     }
 
@@ -617,6 +631,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.startNearbyDiscovery();
         });
         root.addView(scanButton, topMargin(dp(16)));
+        root.addView(qrActionRow(), topMargin(dp(10)));
 
         TextView hint = text("No outro aparelho, deixe o nBTChat aberto e o Bluetooth visivel. Toque em Convidar para tentar conectar.", 13, secondary(), Typeface.NORMAL);
         hint.setLineSpacing(dp(2), 1f);
@@ -645,6 +660,193 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
+    private View qrActionRow() {
+        LinearLayout row = horizontal();
+        row.setGravity(Gravity.CENTER);
+        Button mine = pillButton("Meu QR", surfaceAlt(), primary());
+        mine.setOnClickListener(v -> showMyQrDialog());
+        row.addView(mine, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        Button scan = pillButton("Ler QR", "#16A34A", "#FFFFFF");
+        scan.setOnClickListener(v -> openQrScanner());
+        LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        scanParams.setMargins(dp(8), 0, 0, 0);
+        row.addView(scan, scanParams);
+
+        Button key = pillButton("Chave", surfaceAlt(), primary());
+        key.setOnClickListener(v -> showPasteInviteDialog());
+        LinearLayout.LayoutParams keyParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        keyParams.setMargins(dp(8), 0, 0, 0);
+        row.addView(key, keyParams);
+        return row;
+    }
+
+    private void showQrActionsDialog() {
+        LinearLayout content = vertical();
+        content.setPadding(dp(20), dp(18), dp(20), dp(8));
+        content.setBackgroundColor(color(surface()));
+
+        TextView title = text("Conectar por QR", 22, primary(), Typeface.BOLD);
+        content.addView(title);
+        TextView subtitle = text("Use o QR para adicionar um nBTChat sem depender da lista de descoberta Bluetooth.", 14, secondary(), Typeface.NORMAL);
+        subtitle.setLineSpacing(dp(2), 1f);
+        content.addView(subtitle, topMargin(dp(6)));
+
+        Button mine = pillButton("Mostrar meu QR", surfaceAlt(), primary());
+        mine.setOnClickListener(v -> showMyQrDialog());
+        content.addView(mine, topMargin(dp(16)));
+
+        Button scan = pillButton("Ler QR de outra pessoa", "#16A34A", "#FFFFFF");
+        scan.setOnClickListener(v -> openQrScanner());
+        content.addView(scan, topMargin(dp(10)));
+
+        Button paste = pillButton("Digitar chave", surfaceAlt(), primary());
+        paste.setOnClickListener(v -> showPasteInviteDialog());
+        content.addView(paste, topMargin(dp(10)));
+
+        new AlertDialog.Builder(this)
+                .setView(content)
+                .setPositiveButton("Fechar", null)
+                .show();
+    }
+
+    private String localInvitePayload() {
+        return QrInvite.create(
+                btChatManager.localBluetoothAddress(),
+                btChatManager.localBluetoothName(),
+                identityStore.getDeviceId(),
+                identityStore.getPublicKeyBase64(),
+                profileStore.loadLocalProfile()
+        );
+    }
+
+    private void showMyQrDialog() {
+        String payload = localInvitePayload();
+        if (payload.isEmpty()) {
+            Toast.makeText(this, "Nao foi possivel criar o QR.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        requestDiscoverableForQr();
+
+        LinearLayout content = vertical();
+        content.setPadding(dp(20), dp(18), dp(20), dp(12));
+        content.setBackgroundColor(color(surface()));
+
+        TextView title = text("Meu QR nBTChat", 22, primary(), Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        content.addView(title);
+
+        ImageView qr = new ImageView(this);
+        qr.setImageBitmap(createQrBitmap(payload, dp(248)));
+        qr.setPadding(dp(10), dp(10), dp(10), dp(10));
+        qr.setBackground(rounded("#FFFFFF", dp(14), border()));
+        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(268), dp(268));
+        qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+        qrParams.setMargins(0, dp(16), 0, 0);
+        content.addView(qr, qrParams);
+
+        String bluetoothName = btChatManager.localBluetoothName();
+        String address = btChatManager.localBluetoothAddress();
+        String detail = address.isEmpty()
+                ? "O Android ocultou o endereco Bluetooth. O outro aparelho vai tentar conectar pelo nome pareado: " + (bluetoothName.isEmpty() ? "sem nome" : bluetoothName) + "."
+                : "Endereco Bluetooth incluido para conexao direta.";
+        TextView hint = text(detail, 13, secondary(), Typeface.NORMAL);
+        hint.setGravity(Gravity.CENTER);
+        hint.setLineSpacing(dp(2), 1f);
+        content.addView(hint, topMargin(dp(10)));
+
+        TextView key = text(payload, 10, secondary(), Typeface.NORMAL);
+        key.setTextIsSelectable(true);
+        key.setSingleLine(false);
+        key.setPadding(dp(10), dp(8), dp(10), dp(8));
+        key.setBackground(rounded(surfaceAlt(), dp(10), border()));
+        content.addView(key, topMargin(dp(10)));
+
+        new AlertDialog.Builder(this)
+                .setView(content)
+                .setPositiveButton("Copiar chave", (dialog, which) -> copyMessageText(payload))
+                .setNegativeButton("Fechar", null)
+                .show();
+    }
+
+    private Bitmap createQrBitmap(String payload, int size) {
+        try {
+            BitMatrix matrix = new QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, size, size);
+            int[] pixels = new int[size * size];
+            for (int y = 0; y < size; y++) {
+                int offset = y * size;
+                for (int x = 0; x < size; x++) {
+                    pixels[offset + x] = matrix.get(x, y) ? Color.BLACK : Color.WHITE;
+                }
+            }
+            Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            bitmap.setPixels(pixels, 0, size, 0, 0, size, size);
+            return bitmap;
+        } catch (Exception ignored) {
+            Bitmap empty = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            empty.eraseColor(Color.WHITE);
+            return empty;
+        }
+    }
+
+    private void openQrScanner() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_QR_CAMERA);
+            return;
+        }
+        try {
+            startActivityForResult(new Intent(this, QrScannerActivity.class), REQUEST_SCAN_QR);
+        } catch (Exception ex) {
+            Toast.makeText(this, "Nao foi possivel abrir o leitor de QR.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showPasteInviteDialog() {
+        EditText input = input("Cole a chave nBTChat");
+        input.setSingleLine(false);
+        input.setMinLines(4);
+        input.setMaxLines(8);
+        input.setGravity(Gravity.TOP);
+        new AlertDialog.Builder(this)
+                .setTitle("Digitar chave")
+                .setView(input)
+                .setPositiveButton("Conectar", (dialog, which) -> handleQrInvite(input.getText().toString()))
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void handleQrInvite(String raw) {
+        QrInvite.Invite invite = QrInvite.parse(raw);
+        if (invite == null) {
+            Toast.makeText(this, "QR ou chave nBTChat invalida.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!invite.deviceId.isEmpty() && invite.deviceId.equals(identityStore.getDeviceId())) {
+            Toast.makeText(this, "Este QR e do seu proprio aparelho.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        BtChatManager.DeviceCandidate candidate = btChatManager.getDirectCandidate(invite.address, invite.bluetoothName);
+        String address = candidate == null ? invite.address : candidate.address;
+        if (!QrInvite.validBluetoothAddress(address)) {
+            Toast.makeText(this, "Nao encontrei o endereco Bluetooth. Pareie este aparelho no Android e tente o QR de novo.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        UserProfile profile = invite.profile.isComplete()
+                ? invite.profile
+                : new UserProfile(invite.bluetoothName.isEmpty() ? "Contato nBTChat" : invite.bluetoothName, "", UserProfile.GENDER_OTHER, "");
+        profileStore.saveContact(address, profile);
+        profileStore.saveIdentity(address, invite.deviceId, invite.publicKey);
+        currentRemoteAddress = address;
+        currentRemoteProfile = profile;
+        currentFingerprint = profileStore.loadFingerprint(address);
+        showChatScreen(currentRemoteProfile, currentFingerprint);
+        if (candidate != null) {
+            btChatManager.connectDirect(candidate);
+        } else {
+            Toast.makeText(this, "Contato adicionado. Pareie no Android para conectar por Bluetooth.", Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void requestDiscoverableForScanner() {
         if (!"scanner".equals(currentScreen) || isFinishing()) {
             return;
@@ -661,6 +863,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showState("Seu aparelho ficara visivel por ate 2 minutos.");
         } catch (Exception ex) {
             showState("Nao foi possivel pedir visibilidade Bluetooth.");
+        }
+    }
+
+    private void requestDiscoverableForQr() {
+        if (isFinishing()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastDiscoverableRequestAt < 110_000L) {
+            return;
+        }
+        lastDiscoverableRequestAt = now;
+        try {
+            Intent discoverable = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+            discoverable.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120);
+            startActivity(discoverable);
+        } catch (Exception ignored) {
         }
     }
 
@@ -2289,6 +2508,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             menu.getMenu().add(0, 11, order++, "Apagar conversa");
         }
         menu.getMenu().add(0, 1, order++, "Editar perfil");
+        menu.getMenu().add(0, 12, order++, "Conectar por QR");
         menu.getMenu().add(0, 2, order++, "Compartilhar app");
         menu.getMenu().add(0, 4, order++, "Configuracoes");
         menu.getMenu().add(0, 3, order, darkMode ? "Tema claro" : "Tema escuro");
@@ -2303,6 +2523,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             if (item.getItemId() == 1) {
                 showProfileScreen();
+                return true;
+            }
+            if (item.getItemId() == 12) {
+                showQrActionsDialog();
                 return true;
             }
             if (item.getItemId() == 2) {
