@@ -176,6 +176,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String table100ReturnScreen = "";
     private QrInvite.Invite pendingQrInvite;
     private long pendingQrStartedAt;
+    private String pendingOpenChatAddress = "";
+    private long openNextQrConnectionUntil;
     private View replyPreviewBar;
     private TextView chatTitleText;
     private TextView chatSubtitleText;
@@ -1046,9 +1048,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         BtChatManager.DeviceCandidate candidate = btChatManager.getDirectCandidate(invite.address, invite.bluetoothName);
         String address = candidate == null ? invite.address : candidate.address;
-        UserProfile profile = invite.profile.isComplete()
-                ? invite.profile
-                : new UserProfile(invite.bluetoothName.isEmpty() ? "Contato nBTChat" : invite.bluetoothName, "", UserProfile.GENDER_OTHER, "");
         if (!QrInvite.validBluetoothAddress(address)) {
             pendingQrInvite = invite;
             pendingQrStartedAt = System.currentTimeMillis();
@@ -1063,16 +1062,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }, 35_000L);
             return;
         }
-        profileStore.saveContact(address, profile);
-        profileStore.saveIdentity(address, invite.deviceId, invite.publicKey);
-        currentRemoteAddress = address;
-        currentRemoteProfile = profile;
-        currentFingerprint = profileStore.loadFingerprint(address);
-        showChatScreen(currentRemoteProfile, currentFingerprint);
         if (candidate != null) {
+            pendingOpenChatAddress = address;
+            openNextQrConnectionUntil = System.currentTimeMillis() + 45_000L;
+            Toast.makeText(this, "Conectando pelo QR...", Toast.LENGTH_SHORT).show();
             btChatManager.connectDirect(candidate);
         } else {
-            Toast.makeText(this, "Contato adicionado. Pareie no Android para conectar por Bluetooth.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Nao consegui conectar diretamente. Pareie no Android ou deixe o aparelho visivel.", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1093,17 +1089,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (pendingQrInvite == null || candidate == null || !QrInvite.validBluetoothAddress(candidate.address)) {
             return;
         }
-        QrInvite.Invite invite = pendingQrInvite;
         pendingQrInvite = null;
-        UserProfile profile = invite.profile.isComplete()
-                ? invite.profile
-                : new UserProfile(candidate.name == null || candidate.name.trim().isEmpty() ? "Contato nBTChat" : candidate.name, "", UserProfile.GENDER_OTHER, "");
-        profileStore.saveContact(candidate.address, profile);
-        profileStore.saveIdentity(candidate.address, invite.deviceId, invite.publicKey);
-        currentRemoteAddress = candidate.address;
-        currentRemoteProfile = profile;
-        currentFingerprint = profileStore.loadFingerprint(candidate.address);
-        showChatScreen(currentRemoteProfile, currentFingerprint);
+        pendingOpenChatAddress = candidate.address;
+        openNextQrConnectionUntil = System.currentTimeMillis() + 45_000L;
+        Toast.makeText(this, "Aparelho encontrado. Conectando pelo QR...", Toast.LENGTH_SHORT).show();
         btChatManager.connectDirect(candidate);
     }
 
@@ -1127,6 +1116,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void requestDiscoverableForQr() {
+        openNextQrConnectionUntil = System.currentTimeMillis() + 120_000L;
         if (isFinishing()) {
             return;
         }
@@ -1235,11 +1225,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return true;
         });
 
-        ImageView avatar = new ImageView(this);
-        applyAvatar(avatar, known);
-        avatar.setPadding(dp(3), dp(3), dp(3), dp(3));
-        avatar.setBackground(rounded(surface(), dp(30), presenceColor(contactPresenceStatus(address))));
-        row.addView(avatar, new LinearLayout.LayoutParams(dp(56), dp(56)));
+        row.addView(avatarStatusFrame(known, contactPresenceStatus(address), dp(58), dp(18), dp(4), false, null),
+                new LinearLayout.LayoutParams(dp(58), dp(58)));
 
         LinearLayout info = vertical();
         String title = known.isComplete() ? known.getDisplayName() : (candidate == null ? "Contato nBTChat" : candidate.name);
@@ -1417,10 +1404,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showHomeScreen()));
 
-        ImageView avatar = new ImageView(this);
-        applyAvatar(avatar, currentRemoteProfile);
-        avatar.setOnClickListener(v -> showContactInfoDialog());
-        top.addView(avatar, leftMargin(dp(10), dp(46), dp(46)));
+        FrameLayout avatarFrame = avatarStatusFrame(currentRemoteProfile, contactPresenceStatus(currentRemoteAddress), dp(52), dp(18), dp(4), true, v -> showContactInfoDialog());
+        chatConnectionIcon = (ImageView) avatarFrame.findViewWithTag("presence");
+        top.addView(avatarFrame, leftMargin(dp(10), dp(52), dp(52)));
 
         LinearLayout who = vertical();
         LinearLayout nameRow = horizontal();
@@ -1430,8 +1416,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         chatTitleText.setSingleLine(true);
         chatTitleText.setEllipsize(TextUtils.TruncateAt.END);
         nameRow.addView(chatTitleText, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        chatConnectionIcon = new ImageView(this);
-        nameRow.addView(chatConnectionIcon, leftMargin(dp(10), dp(22), dp(22)));
         who.addView(nameRow);
         String subtitle = currentRemoteProfile.getStatus().isEmpty() ? "Bluetooth seguro" : currentRemoteProfile.getStatus();
         chatSubtitleText = text(subtitle, 12, secondary(), Typeface.NORMAL);
@@ -2762,17 +2746,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (chatConnectionIcon == null) {
             return;
         }
-        boolean online = currentRemoteAddress != null
-                && !currentRemoteAddress.isEmpty()
-                && (onlineAddresses.contains(currentRemoteAddress) || btChatManager.isConnectedTo(currentRemoteAddress));
         String presence = contactPresenceStatus(currentRemoteAddress);
-        if (AppSettingsStore.PRESENCE_BUSY.equals(presence)) {
-            chatConnectionIcon.setImageResource(R.drawable.ic_status_busy_24);
-            chatConnectionIcon.setContentDescription("Ocupado");
-            return;
-        }
-        chatConnectionIcon.setImageResource(online ? R.drawable.ic_status_online_24 : R.drawable.ic_status_offline_24);
-        chatConnectionIcon.setContentDescription(online ? "Online" : "Offline");
+        chatConnectionIcon.setImageResource(presenceDrawable(presence));
+        chatConnectionIcon.setContentDescription(presenceLabel(presence));
+        chatConnectionIcon.setBackground(rounded("#FFFFFF", dp(11), "#FFFFFF"));
     }
 
     private void updateChatHeaderProfile() {
@@ -2929,7 +2906,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         btChatManager.sendPresence(presenceForPeer(settingsStore.userPresence()));
 
         boolean activeChat = "chat".equals(currentScreen) && address.equals(currentRemoteAddress);
-        if (activeChat || "scanner".equals(currentScreen)) {
+        boolean qrOpenedConnection = (address.equals(pendingOpenChatAddress) || (pendingOpenChatAddress.isEmpty() && openNextQrConnectionUntil > System.currentTimeMillis()))
+                && openNextQrConnectionUntil > System.currentTimeMillis();
+        if (qrOpenedConnection) {
+            pendingOpenChatAddress = "";
+            openNextQrConnectionUntil = 0L;
+        }
+        if (activeChat || "scanner".equals(currentScreen) || qrOpenedConnection) {
             currentRemoteAddress = address;
             currentRemoteProfile = profileValue;
             currentFingerprint = fingerprintValue;
@@ -3060,6 +3043,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     @Override
     public void onError(String message) {
+        if (openNextQrConnectionUntil > System.currentTimeMillis()) {
+            pendingOpenChatAddress = "";
+            openNextQrConnectionUntil = 0L;
+        }
         if ("chat".equals(currentScreen) && isQuietConnectionMessage(message)) {
             updateChatHeaderStatus();
             return;
@@ -3811,8 +3798,47 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
+    private FrameLayout avatarStatusFrame(UserProfile profile, String presence, int size, int radius, int borderWidth, boolean badge, View.OnClickListener clickListener) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setPadding(borderWidth, borderWidth, borderWidth, borderWidth);
+        frame.setBackground(roundedStroke(surface(), radius, presenceColor(presence), borderWidth));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            frame.setClipToOutline(true);
+        }
+        ImageView avatar = new ImageView(this);
+        applyAvatar(avatar, profile);
+        avatar.setBackground(rounded(surfaceAlt(), Math.max(dp(8), radius - borderWidth), surfaceAlt()));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            avatar.setClipToOutline(true);
+        }
+        if (clickListener != null) {
+            avatar.setOnClickListener(clickListener);
+            frame.setOnClickListener(clickListener);
+        }
+        frame.addView(avatar, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        if (badge) {
+            ImageView status = new ImageView(this);
+            status.setTag("presence");
+            status.setImageResource(presenceDrawable(presence));
+            status.setBackground(rounded("#FFFFFF", dp(11), "#FFFFFF"));
+            status.setContentDescription(presenceLabel(presence));
+            FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(dp(19), dp(19), Gravity.RIGHT | Gravity.BOTTOM);
+            statusParams.setMargins(0, 0, 0, 0);
+            frame.addView(status, statusParams);
+        }
+        frame.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+        return frame;
+    }
+
     private void applyAvatar(ImageView imageView, UserProfile profile) {
         imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        imageView.setBackground(rounded(surfaceAlt(), dp(18), surfaceAlt()));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            imageView.setClipToOutline(true);
+        }
         Bitmap bitmap = profile == null ? null : decodePhoto(profile.getPhotoBase64());
         if (bitmap != null) {
             imageView.setImageBitmap(bitmap);
@@ -4143,10 +4169,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private GradientDrawable rounded(String fill, int radius, String stroke) {
+        return roundedStroke(fill, radius, stroke, dp(1));
+    }
+
+    private GradientDrawable roundedStroke(String fill, int radius, String stroke, int strokeWidth) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color(fill));
         drawable.setCornerRadius(radius);
-        drawable.setStroke(dp(1), color(stroke));
+        drawable.setStroke(strokeWidth, color(stroke));
         return drawable;
     }
 
