@@ -13,8 +13,12 @@ public final class AppSettingsStore {
     private static final String KEY_NOTIFICATION_SOUND_URI = "notification_sound_uri";
     private static final String KEY_NOTIFICATION_SOUND_NAME = "notification_sound_name";
     private static final String KEY_VOICE_OUTPUT = "voice_output";
+    private static final String KEY_USER_PRESENCE = "user_presence";
     public static final String VOICE_OUTPUT_PHONE = "phone";
     public static final String VOICE_OUTPUT_BLUETOOTH = "bluetooth";
+    public static final String PRESENCE_ONLINE = "online";
+    public static final String PRESENCE_BUSY = "busy";
+    public static final String PRESENCE_INVISIBLE = "invisible";
     private static final long SCAN_PROMPT_INTERVAL_MS = 12L * 60L * 60L * 1000L;
     private static final long SCAN_PROMPT_WINDOW_MS = 3L * 24L * 60L * 60L * 1000L;
 
@@ -65,6 +69,17 @@ public final class AppSettingsStore {
     public void setVoiceOutput(String output) {
         String value = VOICE_OUTPUT_BLUETOOTH.equals(output) ? VOICE_OUTPUT_BLUETOOTH : VOICE_OUTPUT_PHONE;
         prefs.edit().putString(KEY_VOICE_OUTPUT, value).apply();
+    }
+
+    public String userPresence() {
+        return prefs.getString(KEY_USER_PRESENCE, PRESENCE_ONLINE);
+    }
+
+    public void setUserPresence(String presence) {
+        String value = PRESENCE_BUSY.equals(presence) || PRESENCE_INVISIBLE.equals(presence)
+                ? presence
+                : PRESENCE_ONLINE;
+        prefs.edit().putString(KEY_USER_PRESENCE, value).apply();
     }
 
     public boolean shouldPromptNearbyScan(int contactCount) {

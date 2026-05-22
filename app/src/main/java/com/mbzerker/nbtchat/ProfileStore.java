@@ -14,6 +14,9 @@ public final class ProfileStore {
     private static final String CONTACT_PREFS = "known_contacts";
     private static final String FINGERPRINT_PREFS = "contact_fingerprints";
     private static final String IDENTITY_PREFS = "contact_identities";
+    private static final String CONTACT_FLAGS_PREFS = "contact_flags";
+    private static final String KEY_MUTED_PREFIX = "muted:";
+    private static final String KEY_BLOCKED_PREFIX = "blocked:";
     private static final String KEY_NAME = "name";
     private static final String KEY_STATUS = "status";
     private static final String KEY_GENDER = "gender";
@@ -23,12 +26,14 @@ public final class ProfileStore {
     private final SharedPreferences contactPrefs;
     private final SharedPreferences fingerprintPrefs;
     private final SharedPreferences identityPrefs;
+    private final SharedPreferences contactFlagsPrefs;
 
     public ProfileStore(Context context) {
         profilePrefs = context.getSharedPreferences(PROFILE_PREFS, Context.MODE_PRIVATE);
         contactPrefs = context.getSharedPreferences(CONTACT_PREFS, Context.MODE_PRIVATE);
         fingerprintPrefs = context.getSharedPreferences(FINGERPRINT_PREFS, Context.MODE_PRIVATE);
         identityPrefs = context.getSharedPreferences(IDENTITY_PREFS, Context.MODE_PRIVATE);
+        contactFlagsPrefs = context.getSharedPreferences(CONTACT_FLAGS_PREFS, Context.MODE_PRIVATE);
     }
 
     public boolean hasLocalProfile() {
@@ -121,6 +126,41 @@ public final class ProfileStore {
             identityPrefs.edit().putString(address, json.toString()).apply();
         } catch (JSONException ignored) {
         }
+    }
+
+    public void removeContact(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        contactPrefs.edit().remove(address).apply();
+        fingerprintPrefs.edit().remove(address).apply();
+        identityPrefs.edit().remove(address).apply();
+        contactFlagsPrefs.edit()
+                .remove(KEY_MUTED_PREFIX + address)
+                .remove(KEY_BLOCKED_PREFIX + address)
+                .apply();
+    }
+
+    public boolean isMuted(String address) {
+        return address != null && contactFlagsPrefs.getBoolean(KEY_MUTED_PREFIX + address, false);
+    }
+
+    public void setMuted(String address, boolean muted) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        contactFlagsPrefs.edit().putBoolean(KEY_MUTED_PREFIX + address, muted).apply();
+    }
+
+    public boolean isBlocked(String address) {
+        return address != null && contactFlagsPrefs.getBoolean(KEY_BLOCKED_PREFIX + address, false);
+    }
+
+    public void setBlocked(String address, boolean blocked) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        contactFlagsPrefs.edit().putBoolean(KEY_BLOCKED_PREFIX + address, blocked).apply();
     }
 
     public ContactIdentity loadIdentity(String address) {

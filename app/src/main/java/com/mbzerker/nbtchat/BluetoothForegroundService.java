@@ -70,6 +70,10 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         if (currentRemoteAddress.isEmpty()) {
             return;
         }
+        if (profileStore.isBlocked(currentRemoteAddress)) {
+            btChatManager.disconnectCurrent();
+            return;
+        }
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         profileStore.saveContact(currentRemoteAddress, currentRemoteProfile);
     }
@@ -78,6 +82,10 @@ public final class BluetoothForegroundService extends Service implements BtChatM
     public void onConnected(String remoteAddress, UserProfile profile, String fingerprint) {
         currentRemoteAddress = remoteAddress == null ? "" : remoteAddress;
         if (currentRemoteAddress.isEmpty()) {
+            return;
+        }
+        if (profileStore.isBlocked(currentRemoteAddress)) {
+            btChatManager.disconnectCurrent();
             return;
         }
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
@@ -97,6 +105,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         if (address == null || address.trim().isEmpty()) {
             return;
         }
+        if (profileStore.isBlocked(address)) {
+            return;
+        }
         UserProfile profile = profileStore.loadContact(address);
         String remoteName = profile.isComplete() ? profile.getDisplayName() : "nBTChat";
         boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, true, replyToId, replyPreview);
@@ -109,7 +120,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
                 : (MessageStore.KIND_VOICE.equals(kind)
                 ? "Mensagem de voz"
                 : (MessageStore.KIND_TABLE_100.equals(kind) ? "Tabela 100" : body));
-        NotificationHelper.showMessageNotification(this, address, remoteName, preview, unread);
+        if (!profileStore.isMuted(address)) {
+            NotificationHelper.showMessageNotification(this, address, remoteName, preview, unread);
+        }
 
         Intent changed = new Intent(MessageStore.ACTION_MESSAGES_CHANGED);
         changed.setPackage(getPackageName());
@@ -132,6 +145,14 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         changed.putExtra(MessageStore.EXTRA_MESSAGE_ID, id);
         changed.putExtra(MessageStore.EXTRA_DELETED, true);
         sendBroadcast(changed);
+    }
+
+    @Override
+    public void onTypingReceived(String remoteAddress, boolean typing) {
+    }
+
+    @Override
+    public void onPresenceReceived(String remoteAddress, String status) {
     }
 
     @Override

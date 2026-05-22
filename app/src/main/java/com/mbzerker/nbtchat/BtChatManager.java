@@ -57,6 +57,10 @@ public final class BtChatManager {
 
         void onMessageDeleted(String remoteAddress, String id);
 
+        void onTypingReceived(String remoteAddress, boolean typing);
+
+        void onPresenceReceived(String remoteAddress, String status);
+
         void onDisconnected(String remoteAddress);
 
         void onError(String message);
@@ -367,6 +371,20 @@ public final class BtChatManager {
         }
     }
 
+    public void sendTyping(String destinationAddress, boolean typing) {
+        ConnectedThread thread = connectedThread;
+        if (thread != null) {
+            thread.sendTyping(destinationAddress, typing);
+        }
+    }
+
+    public void sendPresence(String status) {
+        ConnectedThread thread = connectedThread;
+        if (thread != null) {
+            thread.sendPresence(status);
+        }
+    }
+
     public boolean canSendTo(String address) {
         ConnectedThread thread = connectedThread;
         if (thread == null) {
@@ -392,6 +410,21 @@ public final class BtChatManager {
             connectedThread = null;
         }
         postState("Conexao encerrada.");
+    }
+
+    @SuppressLint("MissingPermission")
+    public boolean unpair(String address) {
+        DeviceCandidate candidate = getPairedCandidate(address);
+        if (candidate == null || candidate.device == null) {
+            return false;
+        }
+        try {
+            java.lang.reflect.Method method = candidate.device.getClass().getMethod("removeBond");
+            Object result = method.invoke(candidate.device);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -750,6 +783,10 @@ public final class BtChatManager {
                         handleSealed(plain);
                     } else if ("profile".equals(type)) {
                         handleProfileUpdate(plain);
+                    } else if ("typing".equals(type)) {
+                        handleTyping(plain);
+                    } else if ("presence".equals(type)) {
+                        handlePresence(plain);
                     }
                 }
             } catch (EOFException ex) {
@@ -848,6 +885,40 @@ public final class BtChatManager {
             }, "nBTChat-profile").start();
         }
 
+        void sendTyping(String destinationAddress, boolean typing) {
+            if (cryptoSession == null || destinationAddress == null || destinationAddress.isEmpty() || !destinationAddress.equals(remoteAddress)) {
+                return;
+            }
+            new Thread(() -> {
+                try {
+                    JSONObject event = new JSONObject();
+                    event.put("type", "typing");
+                    event.put("typing", typing);
+                    event.put("sentAt", System.currentTimeMillis());
+                    event.put("sourceDeviceId", identityStore.getDeviceId());
+                    writeFrame(cryptoSession.encrypt(event).toString());
+                } catch (Exception ignored) {
+                }
+            }, "nBTChat-typing").start();
+        }
+
+        void sendPresence(String status) {
+            if (cryptoSession == null) {
+                return;
+            }
+            new Thread(() -> {
+                try {
+                    JSONObject event = new JSONObject();
+                    event.put("type", "presence");
+                    event.put("status", status == null ? AppSettingsStore.PRESENCE_ONLINE : status);
+                    event.put("sentAt", System.currentTimeMillis());
+                    event.put("sourceDeviceId", identityStore.getDeviceId());
+                    writeFrame(cryptoSession.encrypt(event).toString());
+                } catch (Exception ignored) {
+                }
+            }, "nBTChat-presence").start();
+        }
+
         private JSONObject messageJson(String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview) throws Exception {
             JSONObject plain = new JSONObject();
             plain.put("type", "message");
@@ -939,6 +1010,16 @@ public final class BtChatManager {
             profileStore.saveIdentity(remoteAddress, deviceId, identityPublicKey);
             mainHandler.post(() -> listener.onRemoteIdentity(remoteAddress, deviceId, identityPublicKey));
             mainHandler.post(() -> listener.onRemoteProfile(remoteAddress, profile));
+        }
+
+        private void handleTyping(JSONObject typingJson) {
+            boolean typing = typingJson.optBoolean("typing", false);
+            mainHandler.post(() -> listener.onTypingReceived(remoteAddress, typing));
+        }
+
+        private void handlePresence(JSONObject presenceJson) {
+            String status = presenceJson.optString("status", AppSettingsStore.PRESENCE_ONLINE);
+            mainHandler.post(() -> listener.onPresenceReceived(remoteAddress, status));
         }
 
         private void handleSealed(JSONObject envelope) throws Exception {
