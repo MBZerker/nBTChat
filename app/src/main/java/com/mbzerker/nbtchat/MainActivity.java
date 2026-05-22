@@ -17,9 +17,13 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.ImageDecoder;
 import android.graphics.Matrix;
 import android.graphics.Typeface;
+import android.graphics.drawable.AnimatedImageDrawable;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
@@ -52,7 +56,11 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputConnectionWrapper;
+import android.view.inputmethod.InputContentInfo;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -87,6 +95,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.ByteBuffer;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -115,6 +124,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_SCAN_QR = 107;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND = 108;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND_FILE = 109;
+    private static final int MAX_GIF_BYTES = 640 * 1024;
     private static final int NAME_LIMIT = 12;
     private static final int LONG_MESSAGE_LIMIT = 360;
 
@@ -174,11 +184,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String pendingReplyPreview = "";
     private String currentTable100Text = "";
     private String table100ReturnScreen = "";
+    private String pendingSharedKind = "";
+    private String pendingSharedBody = "";
+    private String pendingSharedMediaBase64 = "";
     private QrInvite.Invite pendingQrInvite;
     private long pendingQrStartedAt;
     private String pendingOpenChatAddress = "";
     private long openNextQrConnectionUntil;
     private View replyPreviewBar;
+    private FrameLayout chatAvatarFrame;
     private TextView chatTitleText;
     private TextView chatSubtitleText;
     private ImageView chatConnectionIcon;
@@ -203,6 +217,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
+            if (GadgetStore.ACTION_GADGETS_CHANGED.equals(intent.getAction())) {
+                String tableId = intent.getStringExtra(GadgetStore.EXTRA_TABLE_ID);
+                if ("table100_play".equals(currentScreen) && tableId != null && currentTable100Text.contains(tableId)) {
+                    refreshTable100PlayScreen();
+                }
+                return;
+            }
             if (!MessageStore.ACTION_MESSAGES_CHANGED.equals(intent.getAction())) {
                 return;
             }
@@ -244,6 +265,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             tryStartBluetooth();
         }
         openChatFromIntent(getIntent());
+        handleSharedImageIntent(getIntent());
     }
 
     @Override
@@ -262,6 +284,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         super.onNewIntent(intent);
         setIntent(intent);
         openChatFromIntent(intent);
+        handleSharedImageIntent(intent);
     }
 
     @Override
@@ -312,7 +335,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else if (requestCode == REQUEST_PICK_CHAT_IMAGE && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
             if (uri != null) {
-                sendImageMessage(compressImage(uri));
+                sendMediaFromUri(uri);
             }
         } else if (requestCode == REQUEST_CAPTURE_CHAT_IMAGE && resultCode == RESULT_OK) {
             if (pendingCameraUri != null) {
@@ -377,6 +400,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         IntentFilter filter = new IntentFilter(MessageStore.ACTION_MESSAGES_CHANGED);
+        filter.addAction(GadgetStore.ACTION_GADGETS_CHANGED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(messageChangedReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -433,6 +457,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         currentRemoteProfile = profileStore.loadContact(address);
         currentFingerprint = profileStore.loadFingerprint(address);
         showChatScreen(currentRemoteProfile, currentFingerprint);
+    }
+
+    private void handleSharedImageIntent(Intent intent) {
+        if (intent == null || !profileStore.hasLocalProfile() || !Intent.ACTION_SEND.equals(intent.getAction())) {
+            return;
+        }
+        String type = intent.getType();
+        if (type == null || !type.toLowerCase(Locale.ROOT).startsWith("image/")) {
+            return;
+        }
+        Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (uri == null) {
+            return;
+        }
+        preparePendingSharedMedia(uri);
+        intent.setAction("");
     }
 
     @SuppressLint("MissingPermission")
@@ -1404,8 +1444,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showHomeScreen()));
 
-        FrameLayout avatarFrame = avatarStatusFrame(currentRemoteProfile, contactPresenceStatus(currentRemoteAddress), dp(52), dp(18), dp(4), true, v -> showContactInfoDialog());
-        chatConnectionIcon = (ImageView) avatarFrame.findViewWithTag("presence");
+        FrameLayout avatarFrame = avatarStatusFrame(currentRemoteProfile, contactPresenceStatus(currentRemoteAddress), dp(52), dp(18), dp(4), false, v -> showContactInfoDialog());
+        chatAvatarFrame = avatarFrame;
+        chatConnectionIcon = null;
         top.addView(avatarFrame, leftMargin(dp(10), dp(52), dp(52)));
 
         LinearLayout who = vertical();
@@ -1442,8 +1483,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         List<String> readIds = messageStore.unreadMessageIds(currentRemoteAddress);
         messageStore.markRead(currentRemoteAddress);
-        for (String id : readIds) {
-            btChatManager.sendReceipt(currentRemoteAddress, id, MessageStore.STATUS_READ);
+        if (!profileStore.isMuted(currentRemoteAddress)) {
+            for (String id : readIds) {
+                btChatManager.sendReceipt(currentRemoteAddress, id, MessageStore.STATUS_READ);
+            }
         }
         renderChatHistory(true);
 
@@ -1458,7 +1501,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         inputShell.setGravity(Gravity.CENTER_VERTICAL);
         inputShell.setPadding(dp(2), 0, dp(4), 0);
         inputShell.setBackground(rounded(surface(), dp(18), border()));
-        messageInput = inlineInput("Mensagem");
+        messageInput = richMessageInput("Mensagem");
         messageInput.setSingleLine(false);
         messageInput.setMinLines(1);
         messageInput.setMaxLines(4);
@@ -1628,8 +1671,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showFullscreenImage(String imageBase64) {
-        Bitmap bitmap = decodePhoto(imageBase64);
-        if (bitmap == null) {
+        showFullscreenImage(imageBase64, MessageStore.KIND_IMAGE);
+    }
+
+    private void showFullscreenImage(String imageBase64, String kind) {
+        Drawable drawable = mediaDrawable(kind, imageBase64);
+        if (drawable == null) {
             Toast.makeText(this, "Nao foi possivel abrir a imagem.", Toast.LENGTH_LONG).show();
             return;
         }
@@ -1645,7 +1692,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         root.addView(close, closeParams);
 
         ImageView image = new ImageView(this);
-        image.setImageBitmap(bitmap);
+        image.setImageDrawable(drawable);
         image.setAdjustViewBounds(true);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
         root.addView(image, new LinearLayout.LayoutParams(
@@ -1663,6 +1710,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
                 dialog.getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
             }
+            startAnimatedDrawable(drawable);
         });
         dialog.show();
     }
@@ -1767,17 +1815,108 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void sendImageMessage(String imageBase64) {
-        if (imageBase64 == null || imageBase64.isEmpty() || !ensureCanSendMedia()) {
+        sendMediaMessage(MessageStore.KIND_IMAGE, "", imageBase64);
+    }
+
+    private void sendGifMessage(String gifBase64) {
+        sendMediaMessage(MessageStore.KIND_GIF, "GIF", gifBase64);
+    }
+
+    private void sendMediaMessage(String kind, String body, String mediaBase64) {
+        if (mediaBase64 == null || mediaBase64.isEmpty() || !ensureCanSendMedia()) {
             return;
         }
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
         String replyToId = activeReplyId();
         String replyPreview = activeReplyPreview();
-        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_IMAGE, "", imageBase64, 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
-        addMessageBubble(id, "", true, MessageStore.KIND_IMAGE, imageBase64, 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
-        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_IMAGE, "", imageBase64, 0L, sentAt, replyToId, replyPreview);
+        String cleanKind = kind == null || kind.isEmpty() ? MessageStore.KIND_IMAGE : kind;
+        String cleanBody = body == null ? "" : body;
+        messageStore.addMessage(currentRemoteAddress, id, cleanKind, cleanBody, mediaBase64, 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
+        addMessageBubble(id, cleanBody, true, cleanKind, mediaBase64, 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        sendOrQueueOutgoing(currentRemoteAddress, id, cleanKind, cleanBody, mediaBase64, 0L, sentAt, replyToId, replyPreview);
         clearPendingReply();
+    }
+
+    private void sendMediaFromUri(Uri uri) {
+        MediaPayload payload = mediaPayloadFromUri(uri);
+        if (payload == null) {
+            return;
+        }
+        if (MessageStore.KIND_GIF.equals(payload.kind)) {
+            sendGifMessage(payload.mediaBase64);
+        } else {
+            sendImageMessage(payload.mediaBase64);
+        }
+    }
+
+    private boolean handleComposerContentUri(Uri uri) {
+        if (uri == null || !"chat".equals(currentScreen) || currentRemoteAddress == null || currentRemoteAddress.isEmpty()) {
+            Toast.makeText(this, "Abra uma conversa para enviar este item.", Toast.LENGTH_LONG).show();
+            return false;
+        }
+        sendMediaFromUri(uri);
+        return true;
+    }
+
+    private void preparePendingSharedMedia(Uri uri) {
+        MediaPayload payload = mediaPayloadFromUri(uri);
+        if (payload == null) {
+            return;
+        }
+        pendingSharedKind = payload.kind;
+        pendingSharedBody = payload.body;
+        pendingSharedMediaBase64 = payload.mediaBase64;
+        if ("chat".equals(currentScreen) && currentRemoteAddress != null && !currentRemoteAddress.isEmpty()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Enviar imagem?")
+                    .setMessage("Enviar este item para " + safeName(currentRemoteProfile.getDisplayName(), "este contato") + "?")
+                    .setPositiveButton("Enviar", (dialog, which) -> sendPendingSharedMediaTo(currentRemoteAddress))
+                    .setNegativeButton("Escolher contato", (dialog, which) -> showPendingSharedMediaChooser())
+                    .show();
+        } else {
+            showPendingSharedMediaChooser();
+        }
+    }
+
+    private void showPendingSharedMediaChooser() {
+        if (pendingSharedMediaBase64.isEmpty()) {
+            return;
+        }
+        Map<String, UserProfile> contacts = profileStore.loadContacts();
+        List<String> addresses = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
+            addresses.add(entry.getKey());
+            UserProfile profile = entry.getValue();
+            names.add(safeName(profile.isComplete() ? profile.getDisplayName() : "Contato nBTChat", "Contato"));
+        }
+        if (addresses.isEmpty()) {
+            Toast.makeText(this, "Nenhum contato nBTChat para receber a imagem.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Compartilhar imagem com")
+                .setItems(names.toArray(new String[0]), (dialog, which) -> sendPendingSharedMediaTo(addresses.get(which)))
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void sendPendingSharedMediaTo(String address) {
+        if (address == null || address.trim().isEmpty() || pendingSharedMediaBase64.isEmpty()) {
+            return;
+        }
+        long sentAt = System.currentTimeMillis();
+        String id = messageStore.createId();
+        messageStore.addMessage(address, id, pendingSharedKind, pendingSharedBody, pendingSharedMediaBase64, 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
+        sendOrQueueOutgoing(address, id, pendingSharedKind, pendingSharedBody, pendingSharedMediaBase64, 0L, sentAt);
+        pendingSharedKind = "";
+        pendingSharedBody = "";
+        pendingSharedMediaBase64 = "";
+        Toast.makeText(this, "Imagem compartilhada no nBTChat.", Toast.LENGTH_SHORT).show();
+        if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
     }
 
     private void sendVoiceMessage(String audioBase64, long durationMs) {
@@ -1803,13 +1942,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showStoreScreen();
             return;
         }
-        String configuredText = gadgetStore.table100Text();
-        if (configuredText == null || configuredText.trim().isEmpty()) {
+        GadgetStore.Table100Payload payload = gadgetStore.table100Payload();
+        if (payload.copyText.trim().isEmpty()) {
             Toast.makeText(this, "Configure a Tabela 100 antes de enviar.", Toast.LENGTH_LONG).show();
             showTable100ConfigScreen();
             return;
         }
-        String body = configuredText.trim();
+        String body = payload.toMessageBody();
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
         messageStore.addMessage(address, id, MessageStore.KIND_TABLE_100, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
@@ -1880,7 +2019,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (gadgetStore.hasTable100()) {
             TextView active = text("Ativo ate " + formatFullDate(gadgetStore.table100Until()), 13, "#16A34A", Typeface.BOLD);
             item.addView(active, topMargin(dp(14)));
-            TextView current = text(gadgetStore.table100Text().isEmpty() ? "Sem texto configurado." : gadgetStore.table100Text(), 14, primary(), Typeface.NORMAL);
+            String configured = gadgetStore.table100CopyText().isEmpty()
+                    ? "Sem texto configurado."
+                    : "Mensagem: " + (gadgetStore.table100OwnerMessage().isEmpty() ? "sem mensagem" : gadgetStore.table100OwnerMessage())
+                    + "\nCopiar: " + gadgetStore.table100CopyText();
+            TextView current = text(configured, 14, primary(), Typeface.NORMAL);
             current.setPadding(dp(12), dp(10), dp(12), dp(10));
             current.setBackground(rounded(surfaceAlt(), dp(12), border()));
             item.addView(current, topMargin(dp(8)));
@@ -1913,7 +2056,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setItems(actions.toArray(new String[0]), (dialog, which) -> {
                     String action = actions.get(which);
                     if ("Abrir".equals(action)) {
-                        showTable100PlayScreen(gadgetStore.table100Text());
+                        showTable100PlayScreen(gadgetStore.table100Payload().toMessageBody());
                     } else if ("Configurar".equals(action)) {
                         showTable100ConfigScreen();
                     } else if ("Compartilhar".equals(action)) {
@@ -1928,7 +2071,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, "Compre a Tabela 100 antes de compartilhar.", Toast.LENGTH_LONG).show();
             return;
         }
-        if (gadgetStore.table100Text().trim().isEmpty()) {
+        if (gadgetStore.table100CopyText().trim().isEmpty()) {
             Toast.makeText(this, "Configure a Tabela 100 antes de compartilhar.", Toast.LENGTH_LONG).show();
             showTable100ConfigScreen();
             return;
@@ -1972,21 +2115,30 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         addTopActions(top);
         root.addView(top);
 
-        TextView subtitle = text("Escolha o texto que aparece quando alguem toca em qualquer numero.", 14, secondary(), Typeface.NORMAL);
+        TextView subtitle = text("Configure o que aparece para quem usa a tabela e o texto que sera copiado ao confirmar um numero.", 14, secondary(), Typeface.NORMAL);
         subtitle.setLineSpacing(dp(2), 1f);
         root.addView(subtitle, topMargin(dp(12)));
 
-        EditText configInput = input("Texto da tabela");
-        configInput.setSingleLine(false);
-        configInput.setMinLines(4);
-        configInput.setMaxLines(8);
-        configInput.setText(gadgetStore.table100Text());
-        root.addView(configInput, topMargin(dp(18)));
+        root.addView(label("Mensagem para quem usar"));
+        EditText messageInput = input("Mensagem exibida depois da escolha");
+        messageInput.setSingleLine(false);
+        messageInput.setMinLines(3);
+        messageInput.setMaxLines(6);
+        messageInput.setText(gadgetStore.table100OwnerMessage());
+        root.addView(messageInput, topMargin(dp(6)));
+
+        root.addView(label("Texto copiavel"));
+        EditText copyInput = input("Texto que sera copiado");
+        copyInput.setSingleLine(false);
+        copyInput.setMinLines(3);
+        copyInput.setMaxLines(7);
+        copyInput.setText(gadgetStore.table100CopyText());
+        root.addView(copyInput, topMargin(dp(6)));
 
         Button save = pillButton("Salvar", "#16A34A", "#FFFFFF");
         save.setOnClickListener(v -> {
-            gadgetStore.saveTable100Text(configInput.getText().toString());
-            hideKeyboard(configInput);
+            gadgetStore.saveTable100Texts(messageInput.getText().toString(), copyInput.getText().toString());
+            hideKeyboard(copyInput);
             Toast.makeText(this, "Tabela 100 salva.", Toast.LENGTH_SHORT).show();
             showStoreScreen();
         });
@@ -1999,6 +2151,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showTable100PlayScreen(String configuredText) {
         table100ReturnScreen = currentScreen;
         currentTable100Text = configuredText == null ? "" : configuredText.trim();
+        GadgetStore.Table100Payload payload = GadgetStore.Table100Payload.parse(currentTable100Text);
+        boolean owner = table100IsOwner(payload);
         currentScreen = "table100_play";
         messageList = null;
 
@@ -2025,18 +2179,31 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         addTopActions(top);
         root.addView(top);
 
-        TextView subtitle = text("Toque em um numero para abrir a acao configurada.", 14, secondary(), Typeface.NORMAL);
+        TextView subtitle = text(owner
+                ? "Confirme abaixo os numeros assinalados pelos contatos."
+                : "Toque em um numero para confirmar sua escolha.", 14, secondary(), Typeface.NORMAL);
         subtitle.setLineSpacing(dp(2), 1f);
         root.addView(subtitle, topMargin(dp(10)));
 
         LinearLayout board = vertical();
         board.setPadding(dp(10), dp(10), dp(10), dp(10));
         board.setBackground(rounded(darkMode ? "#101C18" : "#F0FBF4", dp(14), "#16A34A"));
-        board.addView(table100Grid(currentTable100Text, false, true));
+        board.addView(table100Grid(payload, false, true, owner));
         root.addView(board, topMargin(dp(18)));
+
+        if (owner) {
+            root.addView(table100OwnerChoices(payload), topMargin(dp(18)));
+        }
 
         setContentView(scrollView);
         requestInsets(root);
+    }
+
+    private void refreshTable100PlayScreen() {
+        String text = currentTable100Text;
+        String returnScreen = table100ReturnScreen;
+        showTable100PlayScreen(text);
+        table100ReturnScreen = returnScreen;
     }
 
     private void sendOrQueueOutgoing(String address, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
@@ -2593,14 +2760,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             bubble.setOnClickListener(openTable);
             title.setOnClickListener(openTable);
             hint.setOnClickListener(openTable);
-        } else if (MessageStore.KIND_IMAGE.equals(kind) && mediaBase64 != null && !mediaBase64.isEmpty()) {
+        } else if ((MessageStore.KIND_IMAGE.equals(kind) || MessageStore.KIND_GIF.equals(kind)) && mediaBase64 != null && !mediaBase64.isEmpty()) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            Bitmap bitmap = decodePhoto(mediaBase64);
-            if (bitmap != null) {
-                image.setImageBitmap(bitmap);
-            }
-            image.setOnClickListener(v -> showFullscreenImage(mediaBase64));
+            applyMediaToImageView(image, kind, mediaBase64);
+            image.setOnClickListener(v -> showFullscreenImage(mediaBase64, kind));
             attachMessageGestures(image, id);
             bubble.addView(image, new LinearLayout.LayoutParams(dp(210), dp(150)));
             if (body != null && !body.isEmpty()) {
@@ -2677,11 +2841,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "\u25F7";
     }
 
-    private GridLayout table100Grid(String configuredText, boolean mine) {
-        return table100Grid(configuredText, mine, false);
-    }
-
-    private GridLayout table100Grid(String configuredText, boolean mine, boolean fullScreen) {
+    private GridLayout table100Grid(GadgetStore.Table100Payload payload, boolean mine, boolean fullScreen, boolean owner) {
         GridLayout grid = new GridLayout(this);
         grid.setColumnCount(fullScreen ? 10 : 5);
         grid.setPadding(0, dp(4), 0, 0);
@@ -2700,10 +2860,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             cell.setMinHeight(0);
             cell.setMinimumHeight(0);
             cell.setPadding(0, 0, 0, 0);
-            String fill = fullScreen ? table100CellColor(number) : (mine ? "#0C5F58" : surfaceAlt());
+            String fill = table100CellColor(payload, number, owner, fullScreen, mine);
             String stroke = fullScreen ? "#BBF7D0" : (mine ? "#7DD3FC" : border());
             cell.setBackground(rounded(fill, dp(fullScreen ? 12 : 8), stroke));
-            cell.setOnClickListener(v -> showTable100NumberDialog(number, configuredText));
+            cell.setOnClickListener(v -> showTable100NumberDialog(number, payload, owner));
             GridLayout.LayoutParams params = new GridLayout.LayoutParams();
             params.width = cellSize;
             params.height = fullScreen ? cellSize : dp(32);
@@ -2713,7 +2873,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return grid;
     }
 
-    private String table100CellColor(int number) {
+    private String table100CellColor(GadgetStore.Table100Payload payload, int number, boolean owner, boolean fullScreen, boolean mine) {
+        int status = table100NumberStatus(payload, number, owner);
+        if (status == 2) {
+            return "#16A34A";
+        }
+        if (status == 1) {
+            return darkMode ? "#4B5563" : "#9CA3AF";
+        }
+        if (!fullScreen) {
+            return mine ? "#0C5F58" : surfaceAlt();
+        }
         int palette = number % 5;
         if (palette == 0) {
             return "#0F766E";
@@ -2730,26 +2900,216 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "#EA580C";
     }
 
-    private void showTable100NumberDialog(int number, String configuredText) {
-        String text = configuredText == null || configuredText.trim().isEmpty()
+    private int table100NumberStatus(GadgetStore.Table100Payload payload, int number, boolean owner) {
+        if (payload == null || payload.tableId.isEmpty()) {
+            return 0;
+        }
+        if (!owner) {
+            return gadgetStore.choiceStatus(payload.tableId, currentRemoteAddress, number);
+        }
+        int status = 0;
+        for (GadgetStore.Table100Choice choice : gadgetStore.loadChoices(payload.tableId)) {
+            if (choice.number == number) {
+                status = choice.confirmed ? 2 : Math.max(status, 1);
+            }
+        }
+        return status;
+    }
+
+    private void showTable100NumberDialog(int number, GadgetStore.Table100Payload payload, boolean owner) {
+        if (payload == null) {
+            return;
+        }
+        if (owner) {
+            showTable100ResultDialog(number, payload);
+            return;
+        }
+        if (table100NumberStatus(payload, number, false) == 2) {
+            showTable100ResultDialog(number, payload);
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Confirmar escolha")
+                .setMessage("Voce escolheu o numero " + number + ", deseja confirmar sua escolha?")
+                .setPositiveButton("Sim", (dialog, which) -> {
+                    markTable100Choice(payload, number);
+                    showTable100ResultDialog(number, payload);
+                })
+                .setNegativeButton("Nao", null)
+                .show();
+    }
+
+    private void showTable100ResultDialog(int number, GadgetStore.Table100Payload payload) {
+        String message = payload.ownerMessage.trim().isEmpty()
+                ? "Escolha registrada."
+                : payload.ownerMessage.trim();
+        String copyText = payload.copyText.trim().isEmpty()
                 ? "Nenhum texto configurado para esta tabela."
-                : configuredText.trim();
+                : payload.copyText.trim();
+        copyToClipboard(copyText, false);
+
+        LinearLayout content = vertical();
+        content.setPadding(dp(18), dp(14), dp(18), dp(4));
+        TextView messageView = text(message, 16, primary(), Typeface.BOLD);
+        messageView.setLineSpacing(dp(2), 1f);
+        content.addView(messageView);
+        TextView box = text(copyText, 15, primary(), Typeface.NORMAL);
+        box.setTextIsSelectable(true);
+        box.setPadding(dp(12), dp(10), dp(12), dp(10));
+        box.setBackground(rounded(surfaceAlt(), dp(12), border()));
+        content.addView(box, topMargin(dp(12)));
+
         new AlertDialog.Builder(this)
                 .setTitle("Numero " + number)
-                .setMessage(text)
-                .setPositiveButton("Copiar", (dialog, which) -> copyMessageText(text))
+                .setView(content)
+                .setPositiveButton("Copiar", (dialog, which) -> copyMessageText(copyText))
                 .setNegativeButton("Fechar", null)
                 .show();
     }
 
-    private void updateChatHeaderStatus() {
-        if (chatConnectionIcon == null) {
+    private void markTable100Choice(GadgetStore.Table100Payload payload, int number) {
+        if (payload == null || payload.tableId.isEmpty() || currentRemoteAddress == null || currentRemoteAddress.isEmpty()) {
             return;
         }
+        UserProfile owner = profileStore.loadContact(currentRemoteAddress);
+        gadgetStore.saveChoice(payload.tableId, currentRemoteAddress, number, owner.isComplete() ? owner.getDisplayName() : "Contato", false);
+        sendTable100Choice(payload, number);
+    }
+
+    private View table100OwnerChoices(GadgetStore.Table100Payload payload) {
+        LinearLayout container = vertical();
+        container.setPadding(dp(14), dp(14), dp(14), dp(14));
+        container.setBackground(rounded(surface(), dp(14), border()));
+        container.addView(text("Escolhas dos contatos", 18, primary(), Typeface.BOLD));
+
+        List<GadgetStore.Table100Choice> choices = gadgetStore.loadChoices(payload.tableId);
+        if (choices.isEmpty()) {
+            TextView empty = text("Nenhum contato assinalou esta tabela ainda.", 14, secondary(), Typeface.NORMAL);
+            container.addView(empty, topMargin(dp(10)));
+            return container;
+        }
+
+        boolean anyPending = false;
+        for (GadgetStore.Table100Choice choice : choices) {
+            if (!choice.confirmed) {
+                if (!anyPending) {
+                    container.addView(text("Pendentes", 13, secondary(), Typeface.BOLD), topMargin(dp(12)));
+                    anyPending = true;
+                }
+                container.addView(table100ChoiceRow(payload, choice), topMargin(dp(8)));
+            }
+        }
+
+        boolean anyConfirmed = false;
+        for (GadgetStore.Table100Choice choice : choices) {
+            if (choice.confirmed) {
+                if (!anyConfirmed) {
+                    container.addView(text("Confirmados", 13, secondary(), Typeface.BOLD), topMargin(dp(14)));
+                    anyConfirmed = true;
+                }
+                container.addView(table100ChoiceRow(payload, choice), topMargin(dp(8)));
+            }
+        }
+        return container;
+    }
+
+    private View table100ChoiceRow(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice) {
+        LinearLayout row = horizontal();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(10), dp(10));
+        row.setBackground(rounded(surfaceAlt(), dp(12), border()));
+
+        UserProfile profile = profileStore.loadContact(choice.address);
+        String name = profile.isComplete() ? profile.getDisplayName() : (choice.name.isEmpty() ? "Contato" : choice.name);
+        TextView label = text(safeName(name, "Contato") + " - numero " + choice.number, 15, primary(), Typeface.BOLD);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(label, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        Switch toggle = new Switch(this);
+        toggle.setChecked(choice.confirmed);
+        toggle.setOnClickListener(v -> {
+            boolean target = toggle.isChecked();
+            String action = target ? "confirmar" : "remover a confirmacao de";
+            new AlertDialog.Builder(this)
+                    .setTitle(target ? "Confirmar escolha?" : "Remover confirmacao?")
+                    .setMessage("Deseja " + action + " " + safeName(name, "Contato") + " no numero " + choice.number + "?")
+                    .setPositiveButton("Sim", (dialog, which) -> {
+                        gadgetStore.setChoiceConfirmed(payload.tableId, choice.address, choice.number, target);
+                        sendTable100Confirmation(payload, choice.address, choice.number, target);
+                        refreshTable100PlayScreen();
+                    })
+                    .setNegativeButton("Nao", (dialog, which) -> toggle.setChecked(!target))
+                    .show();
+        });
+        row.addView(toggle);
+        return row;
+    }
+
+    private boolean table100IsOwner(GadgetStore.Table100Payload payload) {
+        return payload != null && !payload.tableId.isEmpty() && payload.tableId.equals(gadgetStore.table100InstanceId());
+    }
+
+    private void sendTable100Choice(GadgetStore.Table100Payload payload, int number) {
+        try {
+            JSONObject json = new JSONObject();
+            json.put("tableId", payload.tableId);
+            json.put("number", number);
+            json.put("name", profileStore.loadLocalProfile().getDisplayName());
+            sendOrQueueOutgoing(currentRemoteAddress, messageStore.createId(), MessageStore.KIND_TABLE_100_CHOICE,
+                    json.toString(), "", 0L, System.currentTimeMillis());
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void sendTable100Confirmation(GadgetStore.Table100Payload payload, String address, int number, boolean confirmed) {
+        try {
+            JSONObject json = new JSONObject();
+            json.put("tableId", payload.tableId);
+            json.put("number", number);
+            json.put("confirmed", confirmed);
+            sendOrQueueOutgoing(address, messageStore.createId(), MessageStore.KIND_TABLE_100_CONFIRM,
+                    json.toString(), "", 0L, System.currentTimeMillis());
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean handleTable100Event(String address, String kind, String body) {
+        if (!MessageStore.KIND_TABLE_100_CHOICE.equals(kind) && !MessageStore.KIND_TABLE_100_CONFIRM.equals(kind)) {
+            return false;
+        }
+        try {
+            JSONObject json = new JSONObject(body == null ? "{}" : body);
+            String tableId = json.optString("tableId", "");
+            int number = json.optInt("number", 0);
+            if (tableId.isEmpty() || number < 1 || number > 100) {
+                return true;
+            }
+            if (MessageStore.KIND_TABLE_100_CHOICE.equals(kind)) {
+                String name = json.optString("name", "");
+                gadgetStore.saveChoice(tableId, address, number, name, false);
+            } else {
+                boolean confirmed = json.optBoolean("confirmed", false);
+                gadgetStore.setChoiceConfirmed(tableId, address, number, confirmed);
+            }
+            if ("table100_play".equals(currentScreen) && currentTable100Text.contains(tableId)) {
+                refreshTable100PlayScreen();
+            }
+        } catch (Exception ignored) {
+        }
+        return true;
+    }
+
+    private void updateChatHeaderStatus() {
         String presence = contactPresenceStatus(currentRemoteAddress);
-        chatConnectionIcon.setImageResource(presenceDrawable(presence));
-        chatConnectionIcon.setContentDescription(presenceLabel(presence));
-        chatConnectionIcon.setBackground(rounded("#FFFFFF", dp(11), "#FFFFFF"));
+        if (chatAvatarFrame != null) {
+            chatAvatarFrame.setBackground(roundedStroke(surface(), dp(18), presenceColor(presence), dp(4)));
+        }
+        if (chatConnectionIcon != null) {
+            chatConnectionIcon.setImageResource(presenceDrawable(presence));
+            chatConnectionIcon.setContentDescription(presenceLabel(presence));
+            chatConnectionIcon.setBackground(rounded("#FFFFFF", dp(11), "#FFFFFF"));
+        }
     }
 
     private void updateChatHeaderProfile() {
@@ -2937,11 +3297,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (profileStore.isBlocked(address)) {
             return;
         }
+        if (handleTable100Event(address, kind, body)) {
+            return;
+        }
         boolean activeChat = "chat".equals(currentScreen) && address.equals(currentRemoteAddress);
         boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, !activeChat, replyToId, replyPreview);
         if (activeChat) {
             messageStore.markRead(address);
-            btChatManager.sendReceipt(address, id, MessageStore.STATUS_READ);
+            if (!profileStore.isMuted(address)) {
+                btChatManager.sendReceipt(address, id, MessageStore.STATUS_READ);
+            }
             if (inserted) {
                 addMessageBubble(id, body, false, kind, mediaBase64, durationMs, MessageStore.STATUS_DELIVERED, replyToId, replyPreview, true);
             }
@@ -2953,6 +3318,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     @Override
     public void onReceiptReceived(String remoteAddress, String id, String status) {
         String address = remoteAddress == null || remoteAddress.isEmpty() ? currentRemoteAddress : remoteAddress;
+        if (profileStore.isMuted(address) && !MessageStore.STATUS_SENT.equals(status)) {
+            return;
+        }
         messageStore.updateStatus(address, id, status);
         if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
             TextView receipt = receiptViews.get(id);
@@ -3092,7 +3460,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
             messageStore.markRead(address);
-            if (id != null && !id.trim().isEmpty()) {
+            if (id != null && !id.trim().isEmpty() && !profileStore.isMuted(address)) {
                 btChatManager.sendReceipt(address, id, MessageStore.STATUS_READ);
             }
             MessageStore.ChatMessage message = messageStore.findMessage(address, id);
@@ -3493,10 +3861,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void copyMessageText(String body) {
+        copyToClipboard(body, true);
+    }
+
+    private void copyToClipboard(String body, boolean showToast) {
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
             clipboard.setPrimaryClip(ClipData.newPlainText("nBTChat", body == null ? "" : body));
-            Toast.makeText(this, "Texto copiado.", Toast.LENGTH_SHORT).show();
+            if (showToast) {
+                Toast.makeText(this, "Texto copiado.", Toast.LENGTH_SHORT).show();
+            }
         }
     }
 
@@ -3504,7 +3878,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (message == null) {
             return "";
         }
-        if (MessageStore.KIND_IMAGE.equals(message.kind)) {
+        if (MessageStore.KIND_IMAGE.equals(message.kind) || MessageStore.KIND_GIF.equals(message.kind)) {
             return message.mine ? "Voce enviou uma imagem" : "Imagem";
         }
         if (MessageStore.KIND_VOICE.equals(message.kind)) {
@@ -3625,10 +3999,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else if ("store_config".equals(currentScreen)) {
             showTable100ConfigScreen();
         } else if ("table100_play".equals(currentScreen)) {
-            String text = currentTable100Text;
-            String returnScreen = table100ReturnScreen;
-            showTable100PlayScreen(text);
-            table100ReturnScreen = returnScreen;
+            refreshTable100PlayScreen();
         } else {
             showInitialScreen();
         }
@@ -3639,16 +4010,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void startImagePicker(int requestCode) {
-        Intent intent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
         intent.setType("image/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
             startActivityForResult(intent, requestCode);
         } catch (Exception ex) {
-            Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+            Intent fallback = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
             fallback.setType("image/*");
-            fallback.addCategory(Intent.CATEGORY_OPENABLE);
             fallback.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
             fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             try {
@@ -3712,6 +4083,59 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return compressBitmap(original);
         } catch (Exception ex) {
             Toast.makeText(this, "Nao foi possivel carregar a foto.", Toast.LENGTH_LONG).show();
+            return "";
+        }
+    }
+
+    private MediaPayload mediaPayloadFromUri(Uri uri) {
+        if (uri == null) {
+            return null;
+        }
+        if (isGifUri(uri)) {
+            String gifBase64 = uriToBase64(uri, MAX_GIF_BYTES);
+            if (gifBase64.isEmpty()) {
+                Toast.makeText(this, "Este GIF e grande demais para enviar por Bluetooth.", Toast.LENGTH_LONG).show();
+                return null;
+            }
+            return new MediaPayload(MessageStore.KIND_GIF, "GIF", gifBase64);
+        }
+        String imageBase64 = compressImage(uri);
+        if (imageBase64.isEmpty()) {
+            return null;
+        }
+        return new MediaPayload(MessageStore.KIND_IMAGE, "", imageBase64);
+    }
+
+    private boolean isGifUri(Uri uri) {
+        try {
+            String type = getContentResolver().getType(uri);
+            if (type != null && type.toLowerCase(Locale.ROOT).contains("gif")) {
+                return true;
+            }
+        } catch (Exception ignored) {
+        }
+        String name = displayNameForUri(uri).toLowerCase(Locale.ROOT);
+        return name.endsWith(".gif");
+    }
+
+    private String uriToBase64(Uri uri, int maxBytes) {
+        try (InputStream inputStream = getContentResolver().openInputStream(uri);
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            if (inputStream == null) {
+                return "";
+            }
+            byte[] buffer = new byte[8192];
+            int read;
+            int total = 0;
+            while ((read = inputStream.read(buffer)) != -1) {
+                total += read;
+                if (total > maxBytes) {
+                    return "";
+                }
+                outputStream.write(buffer, 0, read);
+            }
+            return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP);
+        } catch (Exception ignored) {
             return "";
         }
     }
@@ -3798,6 +4222,37 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
+    private void applyMediaToImageView(ImageView imageView, String kind, String base64) {
+        Drawable drawable = mediaDrawable(kind, base64);
+        if (drawable != null) {
+            imageView.setImageDrawable(drawable);
+            startAnimatedDrawable(drawable);
+        }
+    }
+
+    private Drawable mediaDrawable(String kind, String base64) {
+        if (base64 == null || base64.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            byte[] bytes = Base64.decode(base64, Base64.NO_WRAP);
+            if (MessageStore.KIND_GIF.equals(kind) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Drawable drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(ByteBuffer.wrap(bytes)));
+                return drawable;
+            }
+            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            return bitmap == null ? null : new BitmapDrawable(getResources(), bitmap);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void startAnimatedDrawable(Drawable drawable) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && drawable instanceof AnimatedImageDrawable) {
+            ((AnimatedImageDrawable) drawable).start();
+        }
+    }
+
     private FrameLayout avatarStatusFrame(UserProfile profile, String presence, int size, int radius, int borderWidth, boolean badge, View.OnClickListener clickListener) {
         FrameLayout frame = new FrameLayout(this);
         frame.setPadding(borderWidth, borderWidth, borderWidth, borderWidth);
@@ -3878,6 +4333,48 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         InputMethodManager manager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
         if (manager != null) {
             manager.hideSoftInputFromWindow(view.getWindowToken(), 0);
+        }
+    }
+
+    private final class GifEditText extends EditText {
+        GifEditText(Context context) {
+            super(context);
+        }
+
+        @Override
+        public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+            InputConnection base = super.onCreateInputConnection(outAttrs);
+            outAttrs.contentMimeTypes = new String[]{"image/gif", "image/*"};
+            if (base == null) {
+                return null;
+            }
+            return new InputConnectionWrapper(base, false) {
+                @Override
+                public boolean commitContent(InputContentInfo inputContentInfo, int flags, Bundle opts) {
+                    if (inputContentInfo == null || inputContentInfo.getContentUri() == null) {
+                        return false;
+                    }
+                    try {
+                        if ((flags & InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION) != 0) {
+                            inputContentInfo.requestPermission();
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    return handleComposerContentUri(inputContentInfo.getContentUri());
+                }
+            };
+        }
+    }
+
+    private static final class MediaPayload {
+        final String kind;
+        final String body;
+        final String mediaBase64;
+
+        MediaPayload(String kind, String body, String mediaBase64) {
+            this.kind = kind == null ? MessageStore.KIND_IMAGE : kind;
+            this.body = body == null ? "" : body;
+            this.mediaBase64 = mediaBase64 == null ? "" : mediaBase64;
         }
     }
 
@@ -4030,6 +4527,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         EditText editText = input(hint);
         editText.setBackgroundColor(Color.TRANSPARENT);
         editText.setPadding(dp(12), dp(8), dp(8), dp(8));
+        return editText;
+    }
+
+    private EditText richMessageInput(String hint) {
+        GifEditText editText = new GifEditText(this);
+        editText.setHint(hint);
+        editText.setTextColor(color(primary()));
+        editText.setHintTextColor(color(secondary()));
+        editText.setTextSize(16);
+        editText.setSingleLine(false);
+        editText.setPadding(dp(12), dp(8), dp(8), dp(8));
+        editText.setBackgroundColor(Color.TRANSPARENT);
         return editText;
     }
 

@@ -973,7 +973,9 @@ public final class BtChatManager {
             long sentAt = plain.optLong("sentAt", System.currentTimeMillis());
             String replyToId = plain.optString("replyToId", "");
             String replyPreview = plain.optString("replyPreview", "");
-            sendReceipt(receiptDestinationAddress, id, MessageStore.STATUS_DELIVERED);
+            if (!profileStore.isMuted(conversationAddress)) {
+                sendReceipt(receiptDestinationAddress, id, MessageStore.STATUS_DELIVERED);
+            }
             mainHandler.post(() -> listener.onMessageReceived(conversationAddress, id, kind, body, mediaBase64, durationMs, sentAt, replyToId, replyPreview));
         }
 

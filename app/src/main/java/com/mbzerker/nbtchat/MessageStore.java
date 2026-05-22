@@ -24,8 +24,11 @@ public final class MessageStore {
     public static final String EXTRA_UNREAD = "unread";
     public static final String KIND_TEXT = "text";
     public static final String KIND_IMAGE = "image";
+    public static final String KIND_GIF = "gif";
     public static final String KIND_VOICE = "voice";
     public static final String KIND_TABLE_100 = "table100";
+    public static final String KIND_TABLE_100_CHOICE = "table100_choice";
+    public static final String KIND_TABLE_100_CONFIRM = "table100_confirm";
     public static final String STATUS_PENDING = "pending";
     public static final String STATUS_SENT = "sent";
     public static final String STATUS_DELIVERED = "delivered";
@@ -261,7 +264,7 @@ public final class MessageStore {
     }
 
     private String preview(ChatMessage message) {
-        if (KIND_IMAGE.equals(message.kind)) {
+        if (KIND_IMAGE.equals(message.kind) || KIND_GIF.equals(message.kind)) {
             return message.mine ? "Voce enviou uma imagem" : "Imagem";
         }
         if (KIND_VOICE.equals(message.kind)) {

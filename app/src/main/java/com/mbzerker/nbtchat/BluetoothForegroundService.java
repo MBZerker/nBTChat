@@ -4,12 +4,16 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.IBinder;
 
+import org.json.JSONObject;
+
 public final class BluetoothForegroundService extends Service implements BtChatManager.Listener {
     public static final String ACTION_PROFILE_UPDATED = "com.mbzerker.nbtchat.PROFILE_UPDATED";
 
     private BtChatManager btChatManager;
     private ProfileStore profileStore;
     private MessageStore messageStore;
+    private GadgetStore gadgetStore;
+    private AppSettingsStore settingsStore;
     private String currentRemoteAddress = "";
     private UserProfile currentRemoteProfile = UserProfile.empty();
 
@@ -18,6 +22,8 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         super.onCreate();
         profileStore = new ProfileStore(this);
         messageStore = new MessageStore(this);
+        gadgetStore = new GadgetStore(this);
+        settingsStore = new AppSettingsStore(this);
         btChatManager = new BtChatManager(this, this);
         NotificationHelper.ensureChannels(this);
         startForeground(NotificationHelper.ONLINE_NOTIFICATION_ID, NotificationHelper.buildBackgroundNotification(this));
@@ -91,6 +97,7 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         profileStore.saveContact(currentRemoteAddress, currentRemoteProfile);
         profileStore.saveFingerprint(currentRemoteAddress, fingerprint);
+        btChatManager.sendPresence(presenceForPeer(settingsStore.userPresence()));
         resendUndeliveredMessages(currentRemoteAddress);
     }
 
@@ -108,6 +115,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         if (profileStore.isBlocked(address)) {
             return;
         }
+        if (handleTable100Event(address, kind, body)) {
+            return;
+        }
         UserProfile profile = profileStore.loadContact(address);
         String remoteName = profile.isComplete() ? profile.getDisplayName() : "nBTChat";
         boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, true, replyToId, replyPreview);
@@ -115,7 +125,7 @@ public final class BluetoothForegroundService extends Service implements BtChatM
             return;
         }
         int unread = messageStore.getUnread(address);
-        String preview = MessageStore.KIND_IMAGE.equals(kind)
+        String preview = (MessageStore.KIND_IMAGE.equals(kind) || MessageStore.KIND_GIF.equals(kind))
                 ? "Imagem"
                 : (MessageStore.KIND_VOICE.equals(kind)
                 ? "Mensagem de voz"
@@ -162,6 +172,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
     @Override
     public void onReceiptReceived(String remoteAddress, String id, String status) {
         String address = remoteAddress == null ? currentRemoteAddress : remoteAddress;
+        if (profileStore.isMuted(address) && !MessageStore.STATUS_SENT.equals(status)) {
+            return;
+        }
         messageStore.updateStatus(address, id, status);
         Intent changed = new Intent(MessageStore.ACTION_MESSAGES_CHANGED);
         changed.setPackage(getPackageName());
@@ -183,5 +196,36 @@ public final class BluetoothForegroundService extends Service implements BtChatM
             btChatManager.sendChatMessage(address, message.id, message.kind, message.body, message.mediaBase64,
                     message.durationMs, message.sentAt, message.replyToId, message.replyPreview);
         }
+    }
+
+    private boolean handleTable100Event(String address, String kind, String body) {
+        if (!MessageStore.KIND_TABLE_100_CHOICE.equals(kind) && !MessageStore.KIND_TABLE_100_CONFIRM.equals(kind)) {
+            return false;
+        }
+        try {
+            JSONObject json = new JSONObject(body == null ? "{}" : body);
+            String tableId = json.optString("tableId", "");
+            int number = json.optInt("number", 0);
+            if (tableId.isEmpty() || number < 1 || number > 100) {
+                return true;
+            }
+            if (MessageStore.KIND_TABLE_100_CHOICE.equals(kind)) {
+                gadgetStore.saveChoice(tableId, address, number, json.optString("name", ""), false);
+            } else {
+                gadgetStore.setChoiceConfirmed(tableId, address, number, json.optBoolean("confirmed", false));
+            }
+            Intent changed = new Intent(GadgetStore.ACTION_GADGETS_CHANGED);
+            changed.setPackage(getPackageName());
+            changed.putExtra(GadgetStore.EXTRA_TABLE_ID, tableId);
+            sendBroadcast(changed);
+        } catch (Exception ignored) {
+        }
+        return true;
+    }
+
+    private String presenceForPeer(String presence) {
+        return AppSettingsStore.PRESENCE_INVISIBLE.equals(presence)
+                ? "offline"
+                : presence;
     }
 }
