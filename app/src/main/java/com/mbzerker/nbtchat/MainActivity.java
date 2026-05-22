@@ -64,7 +64,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
 import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 import com.google.zxing.qrcode.QRCodeWriter;
 
 import org.json.JSONObject;
@@ -83,6 +85,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -101,6 +104,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_CAPTURE_CHAT_IMAGE = 105;
     private static final int REQUEST_QR_CAMERA = 106;
     private static final int REQUEST_SCAN_QR = 107;
+    private static final int NAME_LIMIT = 12;
+    private static final int LONG_MESSAGE_LIMIT = 360;
 
     private static final String[] GENDER_LABELS = {
             "Masculino",
@@ -155,6 +160,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String pendingReplyAddress = "";
     private String pendingReplyId = "";
     private String pendingReplyPreview = "";
+    private String currentTable100Text = "";
+    private String table100ReturnScreen = "";
     private View replyPreviewBar;
     private TextView chatTitleText;
     private TextView chatSubtitleText;
@@ -737,7 +744,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         content.addView(title);
 
         ImageView qr = new ImageView(this);
-        qr.setImageBitmap(createQrBitmap(payload, dp(248)));
+        Bitmap qrBitmap = createQrBitmap(payload, dp(248));
+        if (qrBitmap == null) {
+            Toast.makeText(this, "Nao foi possivel gerar o QR. Use a chave de convite.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        qr.setImageBitmap(qrBitmap);
         qr.setPadding(dp(10), dp(10), dp(10), dp(10));
         qr.setBackground(rounded("#FFFFFF", dp(14), border()));
         LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(268), dp(268));
@@ -771,7 +783,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private Bitmap createQrBitmap(String payload, int size) {
         try {
-            BitMatrix matrix = new QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, size, size);
+            Map<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
+            hints.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M);
+            hints.put(EncodeHintType.MARGIN, 2);
+            BitMatrix matrix = new QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, size, size, hints);
             int[] pixels = new int[size * size];
             for (int y = 0; y < size; y++) {
                 int offset = y * size;
@@ -783,9 +798,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             bitmap.setPixels(pixels, 0, size, 0, 0, size, size);
             return bitmap;
         } catch (Exception ignored) {
-            Bitmap empty = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-            empty.eraseColor(Color.WHITE);
-            return empty;
+            return null;
         }
     }
 
@@ -1052,8 +1065,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         root.addView(photoActions);
 
         EditText nameInput = input("Nome");
-        nameInput.setText(saved.getDisplayName());
-        nameInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(36)});
+        nameInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(NAME_LIMIT)});
+        nameInput.setText(safeName(saved.getDisplayName(), ""));
         root.addView(label("Nome"));
         root.addView(nameInput, topMargin(dp(6)));
 
@@ -1075,6 +1088,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Button saveButton = pillButton("Salvar", accent(), darkMode ? "#12171D" : "#17212B");
         saveButton.setOnClickListener(v -> {
             String name = nameInput.getText().toString().trim();
+            if (name.length() > NAME_LIMIT) {
+                name = name.substring(0, NAME_LIMIT);
+            }
             if (name.isEmpty()) {
                 nameInput.setError("Informe seu nome");
                 return;
@@ -1130,9 +1146,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         chatTitleText = text(safeName(title, "Conversa Bluetooth"), 17, primary(), Typeface.BOLD);
         chatTitleText.setSingleLine(true);
         chatTitleText.setEllipsize(TextUtils.TruncateAt.END);
-        nameRow.addView(chatTitleText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        nameRow.addView(chatTitleText, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         chatConnectionIcon = new ImageView(this);
-        nameRow.addView(chatConnectionIcon, leftMargin(dp(8), dp(22), dp(22)));
+        nameRow.addView(chatConnectionIcon, leftMargin(dp(10), dp(22), dp(22)));
         who.addView(nameRow);
         String subtitle = currentRemoteProfile.getStatus().isEmpty() ? "Bluetooth seguro" : currentRemoteProfile.getStatus();
         chatSubtitleText = text(subtitle, 12, secondary(), Typeface.NORMAL);
@@ -1186,7 +1202,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         inputParams.setMargins(dp(8), 0, dp(8), 0);
         composer.addView(inputShell, inputParams);
 
-        composer.addView(iconButton(R.drawable.ic_table_24, "Tabela 100", dp(46), v -> sendTable100Message()));
         composer.addView(voiceRecordButton());
         composer.addView(iconButton(R.drawable.ic_send_24, "Enviar", dp(46), v -> sendCurrentMessage()));
         root.addView(composer);
@@ -1457,8 +1472,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         clearPendingReply();
     }
 
-    private void sendTable100Message() {
-        if (!hasCurrentConversation()) {
+    private void sendTable100ToAddress(String address) {
+        if (address == null || address.trim().isEmpty()) {
             return;
         }
         if (!gadgetStore.hasTable100()) {
@@ -1475,12 +1490,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String body = configuredText.trim();
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
-        String replyToId = activeReplyId();
-        String replyPreview = activeReplyPreview();
-        messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_TABLE_100, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
-        addMessageBubble(id, body, true, MessageStore.KIND_TABLE_100, "", 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
-        sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_TABLE_100, body, "", 0L, sentAt, replyToId, replyPreview);
-        clearPendingReply();
+        messageStore.addMessage(address, id, MessageStore.KIND_TABLE_100, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
+        sendOrQueueOutgoing(address, id, MessageStore.KIND_TABLE_100, body, "", 0L, sentAt);
+        Toast.makeText(this, "Tabela 100 enviada.", Toast.LENGTH_SHORT).show();
+        if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
     }
 
     private void showStoreScreen() {
@@ -1545,10 +1560,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             current.setPadding(dp(12), dp(10), dp(12), dp(10));
             current.setBackground(rounded(surfaceAlt(), dp(12), border()));
             item.addView(current, topMargin(dp(8)));
-            Button configure = pillButton("Configurar", "#16A34A", "#FFFFFF");
-            configure.setOnClickListener(v -> showTable100ConfigScreen());
-            item.addView(configure, topMargin(dp(12)));
-            item.setOnClickListener(v -> showTable100ConfigScreen());
+            Button options = pillButton("Opcoes", "#16A34A", "#FFFFFF");
+            options.setOnClickListener(v -> showTable100OptionsDialog());
+            item.addView(options, topMargin(dp(12)));
+            item.setOnClickListener(v -> showTable100OptionsDialog());
         } else {
             TextView price = text("Teste: uso liberado por 7 dias.", 13, secondary(), Typeface.BOLD);
             item.addView(price, topMargin(dp(14)));
@@ -1562,6 +1577,57 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             item.setOnClickListener(v -> buy.performClick());
         }
         return item;
+    }
+
+    private void showTable100OptionsDialog() {
+        List<String> actions = new ArrayList<>();
+        actions.add("Abrir");
+        actions.add("Configurar");
+        actions.add("Compartilhar");
+        new AlertDialog.Builder(this)
+                .setTitle("Tabela 100")
+                .setItems(actions.toArray(new String[0]), (dialog, which) -> {
+                    String action = actions.get(which);
+                    if ("Abrir".equals(action)) {
+                        showTable100PlayScreen(gadgetStore.table100Text());
+                    } else if ("Configurar".equals(action)) {
+                        showTable100ConfigScreen();
+                    } else if ("Compartilhar".equals(action)) {
+                        showTable100ShareChooser();
+                    }
+                })
+                .show();
+    }
+
+    private void showTable100ShareChooser() {
+        if (!gadgetStore.hasTable100()) {
+            Toast.makeText(this, "Compre a Tabela 100 antes de compartilhar.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (gadgetStore.table100Text().trim().isEmpty()) {
+            Toast.makeText(this, "Configure a Tabela 100 antes de compartilhar.", Toast.LENGTH_LONG).show();
+            showTable100ConfigScreen();
+            return;
+        }
+        Map<String, UserProfile> contacts = profileStore.loadContacts();
+        List<String> addresses = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
+            if (btChatManager.getPairedCandidate(entry.getKey()) == null) {
+                continue;
+            }
+            addresses.add(entry.getKey());
+            UserProfile profile = entry.getValue();
+            names.add(safeName(profile.isComplete() ? profile.getDisplayName() : "Contato", "Contato"));
+        }
+        if (addresses.isEmpty()) {
+            Toast.makeText(this, "Nenhum contato pareado para compartilhar.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Compartilhar Tabela 100")
+                .setItems(names.toArray(new String[0]), (dialog, which) -> sendTable100ToAddress(addresses.get(which)))
+                .show();
     }
 
     private void showTable100ConfigScreen() {
@@ -1603,6 +1669,49 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         root.addView(save, topMargin(dp(16)));
 
         setContentView(root);
+        requestInsets(root);
+    }
+
+    private void showTable100PlayScreen(String configuredText) {
+        table100ReturnScreen = currentScreen;
+        currentTable100Text = configuredText == null ? "" : configuredText.trim();
+        currentScreen = "table100_play";
+        messageList = null;
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
+        scrollView.addView(root, matchWrap());
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> {
+            if ("chat".equals(table100ReturnScreen)) {
+                showChatScreen(currentRemoteProfile, currentFingerprint);
+            } else {
+                showStoreScreen();
+            }
+        }));
+        TextView title = text("Tabela 100", 26, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        top.addView(menuButton());
+        root.addView(top);
+
+        TextView subtitle = text("Toque em um numero para abrir a acao configurada.", 14, secondary(), Typeface.NORMAL);
+        subtitle.setLineSpacing(dp(2), 1f);
+        root.addView(subtitle, topMargin(dp(10)));
+
+        LinearLayout board = vertical();
+        board.setPadding(dp(10), dp(10), dp(10), dp(10));
+        board.setBackground(rounded(darkMode ? "#101C18" : "#F0FBF4", dp(14), "#16A34A"));
+        board.addView(table100Grid(currentTable100Text, false, true));
+        root.addView(board, topMargin(dp(18)));
+
+        setContentView(scrollView);
         requestInsets(root);
     }
 
@@ -1954,6 +2063,36 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return view;
     }
 
+    private void addTextContentToBubble(LinearLayout bubble, String id, String body, boolean mine) {
+        String value = body == null ? "" : body;
+        if (value.length() <= LONG_MESSAGE_LIMIT) {
+            TextView content = messageText(value, mine);
+            attachMessageGestures(content, id);
+            bubble.addView(content);
+            return;
+        }
+
+        String preview = value.substring(0, LONG_MESSAGE_LIMIT).trim() + "...";
+        TextView content = messageText(preview, mine);
+        attachMessageGestures(content, id);
+        bubble.addView(content);
+
+        LinearLayout footer = horizontal();
+        footer.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        ImageButton expand = iconButton(R.drawable.ic_expand_down_24, "Mostrar mensagem completa", dp(34), null);
+        expand.setColorFilter(Color.WHITE);
+        expand.setBackground(rounded("#2563EB", dp(17), "#60A5FA"));
+        expand.setPadding(dp(7), dp(7), dp(7), dp(7));
+        expand.setOnClickListener(v -> {
+            content.setText(value);
+            applyLinkSpans(content, value, mine);
+            expand.setVisibility(View.GONE);
+            scrollMessagesToBottom();
+        });
+        footer.addView(expand, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        bubble.addView(footer, topMargin(dp(6)));
+    }
+
     private void applyLinkSpans(TextView view, String body, boolean mine) {
         Matcher matcher = LINK_PATTERN.matcher(body);
         if (!matcher.find()) {
@@ -2078,23 +2217,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         if (MessageStore.KIND_TABLE_100.equals(kind)) {
             TextView title = text("Tabela 100", 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
+            title.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_table_24, 0, 0, 0);
+            title.setCompoundDrawablePadding(dp(8));
             bubble.addView(title);
-            TextView hint = text("Toque para expandir os numeros", 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL);
+            TextView hint = text("Toque para abrir", 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL);
             bubble.addView(hint, topMargin(dp(2)));
-            final GridLayout[] expandedGrid = new GridLayout[1];
-            View.OnClickListener toggleTable = v -> {
-                if (expandedGrid[0] == null) {
-                    expandedGrid[0] = table100Grid(body, mine);
-                    int insertAt = mine && bubble.getChildCount() > 0 ? bubble.getChildCount() - 1 : bubble.getChildCount();
-                    bubble.addView(expandedGrid[0], insertAt, topMargin(dp(10)));
-                } else {
-                    bubble.removeView(expandedGrid[0]);
-                    expandedGrid[0] = null;
-                }
-            };
-            bubble.setOnClickListener(toggleTable);
-            title.setOnClickListener(toggleTable);
-            hint.setOnClickListener(toggleTable);
+            View.OnClickListener openTable = v -> showTable100PlayScreen(body);
+            bubble.setOnClickListener(openTable);
+            title.setOnClickListener(openTable);
+            hint.setOnClickListener(openTable);
         } else if (MessageStore.KIND_IMAGE.equals(kind) && mediaBase64 != null && !mediaBase64.isEmpty()) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -2144,9 +2275,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             voiceRow.addView(time, leftMargin(dp(4), LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
             bubble.addView(voiceRow);
         } else {
-            TextView content = messageText(body, mine);
-            attachMessageGestures(content, id);
-            bubble.addView(content);
+            addTextContentToBubble(bubble, id, body, mine);
         }
         if (mine) {
             TextView receipt = text(statusIcon(status), 11, statusColor(status), Typeface.BOLD);
@@ -2182,15 +2311,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private GridLayout table100Grid(String configuredText, boolean mine) {
+        return table100Grid(configuredText, mine, false);
+    }
+
+    private GridLayout table100Grid(String configuredText, boolean mine, boolean fullScreen) {
         GridLayout grid = new GridLayout(this);
-        grid.setColumnCount(5);
+        grid.setColumnCount(fullScreen ? 10 : 5);
         grid.setPadding(0, dp(4), 0, 0);
+        int available = Math.max(dp(280), getResources().getDisplayMetrics().widthPixels - dp(56));
+        int cellSize = fullScreen ? Math.max(dp(29), Math.min(dp(42), available / 10 - dp(4))) : dp(40);
         for (int i = 1; i <= 100; i++) {
             final int number = i;
             Button cell = new Button(this);
             cell.setText(String.valueOf(i));
-            cell.setTextSize(11);
-            cell.setTextColor(color(mine ? "#FFFFFF" : primary()));
+            cell.setTextSize(fullScreen ? 12 : 11);
+            cell.setTextColor(color(fullScreen ? "#FFFFFF" : (mine ? "#FFFFFF" : primary())));
             cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             cell.setAllCaps(false);
             cell.setMinWidth(0);
@@ -2198,15 +2333,34 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             cell.setMinHeight(0);
             cell.setMinimumHeight(0);
             cell.setPadding(0, 0, 0, 0);
-            cell.setBackground(rounded(mine ? "#0C5F58" : surfaceAlt(), dp(8), mine ? "#7DD3FC" : border()));
+            String fill = fullScreen ? table100CellColor(number) : (mine ? "#0C5F58" : surfaceAlt());
+            String stroke = fullScreen ? "#BBF7D0" : (mine ? "#7DD3FC" : border());
+            cell.setBackground(rounded(fill, dp(fullScreen ? 12 : 8), stroke));
             cell.setOnClickListener(v -> showTable100NumberDialog(number, configuredText));
             GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-            params.width = dp(40);
-            params.height = dp(32);
+            params.width = cellSize;
+            params.height = fullScreen ? cellSize : dp(32);
             params.setMargins(dp(2), dp(2), dp(2), dp(2));
             grid.addView(cell, params);
         }
         return grid;
+    }
+
+    private String table100CellColor(int number) {
+        int palette = number % 5;
+        if (palette == 0) {
+            return "#0F766E";
+        }
+        if (palette == 1) {
+            return "#16A34A";
+        }
+        if (palette == 2) {
+            return "#0284C7";
+        }
+        if (palette == 3) {
+            return "#7C3AED";
+        }
+        return "#EA580C";
     }
 
     private void showTable100NumberDialog(int number, String configuredText) {
@@ -2285,7 +2439,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (name.isEmpty()) {
             name = fallback;
         }
-        return name.length() > 42 ? name.substring(0, 39) + "..." : name;
+        return name.length() > NAME_LIMIT ? name.substring(0, NAME_LIMIT) : name;
     }
 
     @Override
@@ -2746,7 +2900,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setTitle("Atualizacao disponivel")
                 .setMessage(updateVersionName.isEmpty() ? "Uma nova versao do nBTChat esta pronta para baixar." : "Versao " + updateVersionName + " disponivel.")
                 .setPositiveButton("Baixar APK", (dialog, which) -> openExternalLink(Uri.parse(updateApkUrl)))
-                .setNeutralButton("Pagina", (dialog, which) -> openExternalLink(Uri.parse(updatePageUrl)))
                 .setNegativeButton("Agora nao", null)
                 .show();
     }
@@ -2807,6 +2960,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showStoreScreen();
         } else if ("store_config".equals(currentScreen)) {
             showTable100ConfigScreen();
+        } else if ("table100_play".equals(currentScreen)) {
+            String text = currentTable100Text;
+            String returnScreen = table100ReturnScreen;
+            showTable100PlayScreen(text);
+            table100ReturnScreen = returnScreen;
         } else {
             showInitialScreen();
         }

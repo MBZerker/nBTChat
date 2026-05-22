@@ -12,6 +12,13 @@ public final class QrInvite {
 
     public static String create(String address, String bluetoothName, String deviceId, String publicKey, UserProfile profile) {
         try {
+            UserProfile profileValue = profile == null ? UserProfile.empty() : profile;
+            JSONObject compactProfile = new JSONObject();
+            compactProfile.put("displayName", profileValue.getDisplayName());
+            compactProfile.put("status", profileValue.getStatus());
+            compactProfile.put("gender", profileValue.getGender());
+            compactProfile.put("photoBase64", "");
+
             JSONObject json = new JSONObject();
             json.put("type", "nbtchat-invite");
             json.put("v", 1);
@@ -19,7 +26,7 @@ public final class QrInvite {
             json.put("bluetoothName", clean(bluetoothName));
             json.put("deviceId", clean(deviceId));
             json.put("publicKey", clean(publicKey));
-            json.put("profile", profile == null ? UserProfile.empty().toJson() : profile.toJson());
+            json.put("profile", compactProfile);
             return PREFIX + Base64.encodeToString(json.toString().getBytes("UTF-8"), Base64.URL_SAFE | Base64.NO_WRAP);
         } catch (Exception ignored) {
             return "";
