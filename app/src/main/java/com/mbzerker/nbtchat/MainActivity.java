@@ -21,9 +21,14 @@ import android.graphics.Matrix;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.media.AudioAttributes;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 import android.media.ExifInterface;
 import android.media.MediaPlayer;
 import android.media.MediaRecorder;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -108,6 +113,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_QR_CAMERA = 106;
     private static final int REQUEST_SCAN_QR = 107;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND = 108;
+    private static final int REQUEST_PICK_NOTIFICATION_SOUND_FILE = 109;
     private static final int NAME_LIMIT = 12;
     private static final int LONG_MESSAGE_LIMIT = 360;
 
@@ -124,6 +130,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             "\uD83D\uDCAA", "\uD83C\uDF7A", "\uD83C\uDFB5", "\uD83D\uDCA1", "\u2705", "\uD83D\uDE80"
     };
     private static final String UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/update.json";
+    private static final String DOWNLOAD_PAGE_URL = "https://mbzerker.github.io/nBTChat/";
     private static final Pattern LINK_PATTERN = Pattern.compile("(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)");
 
     private final Map<String, BtChatManager.DeviceCandidate> discoveredDevices = new LinkedHashMap<>();
@@ -175,7 +182,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private boolean messageReceiverRegistered;
     private boolean updateAvailable;
     private String updateVersionName = "";
-    private String updatePageUrl = "https://mbzerker.github.io/nBTChat/";
+    private String updatePageUrl = DOWNLOAD_PAGE_URL;
     private String updateApkUrl = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat.apk";
     private MediaPlayer playingVoicePlayer;
     private File playingVoiceFile;
@@ -307,14 +314,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             pendingCameraUri = null;
         } else if (requestCode == REQUEST_SCAN_QR && resultCode == RESULT_OK && data != null) {
             handleQrInvite(data.getStringExtra(QrScannerActivity.EXTRA_QR_TEXT));
-        } else if (requestCode == REQUEST_PICK_NOTIFICATION_SOUND && resultCode == RESULT_OK && data != null) {
-            Uri uri = data.getData();
+        } else if ((requestCode == REQUEST_PICK_NOTIFICATION_SOUND || requestCode == REQUEST_PICK_NOTIFICATION_SOUND_FILE)
+                && resultCode == RESULT_OK && data != null) {
+            Uri uri = null;
+            if (requestCode == REQUEST_PICK_NOTIFICATION_SOUND) {
+                uri = data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
+            }
+            if (uri == null) {
+                uri = data.getData();
+            }
             if (uri != null) {
                 try {
                     getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } catch (Exception ignored) {
                 }
-                settingsStore.setNotificationSound(uri.toString(), displayNameForUri(uri));
+                settingsStore.setNotificationSound(uri.toString(), displayNameForSoundUri(uri));
                 NotificationHelper.ensureChannels(this);
                 if ("settings".equals(currentScreen)) {
                     showSettingsScreen();
@@ -465,7 +479,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         TextView title = text("Conversas", 28, primary(), Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         top.addView(title, titleParams);
-        top.addView(menuButton());
+        addTopActions(top);
         root.addView(top);
 
         stateText = null;
@@ -547,16 +561,55 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         bar.setGravity(Gravity.CENTER);
         bar.setPadding(dp(12), dp(8), dp(12), dp(8));
         bar.setBackground(rounded(surface(), dp(22), border()));
-        bar.addView(navButton(R.drawable.ic_home_24, "Conversas", true, v -> showHomeScreen()), new LinearLayout.LayoutParams(0, dp(62), 1));
-        bar.addView(navButton(R.drawable.ic_update_24, "Atualizacoes", updateAvailable, v -> {
-            if (updateAvailable) {
-                showUpdateDialog();
-            } else {
-                checkForUpdates(true);
-            }
-        }), new LinearLayout.LayoutParams(0, dp(62), 1));
-        bar.addView(navButton(R.drawable.ic_tent_24, "Loja", false, v -> showStoreScreen()), new LinearLayout.LayoutParams(0, dp(62), 1));
+        bar.addView(navButton(R.drawable.ic_home_24, "Conversas", "home".equals(currentScreen), v -> showHomeScreen()), new LinearLayout.LayoutParams(0, dp(62), 1));
+        bar.addView(navButton(R.drawable.ic_social_updates_24, "Atualizacoes", "updates".equals(currentScreen), v -> showUpdatesScreen()), new LinearLayout.LayoutParams(0, dp(62), 1));
+        bar.addView(navButton(R.drawable.ic_tent_24, "Loja", "store".equals(currentScreen), v -> showStoreScreen()), new LinearLayout.LayoutParams(0, dp(62), 1));
         return bar;
+    }
+
+    private void showUpdatesScreen() {
+        currentScreen = "updates";
+        messageList = null;
+
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(12));
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text("Atualizacoes", 27, primary(), Typeface.BOLD);
+        top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        addTopActions(top);
+        root.addView(top);
+
+        LinearLayout content = vertical();
+        content.setGravity(Gravity.CENTER);
+        content.setPadding(dp(18), dp(22), dp(18), dp(22));
+        content.setBackground(rounded(surface(), dp(14), border()));
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_social_updates_24);
+        icon.setColorFilter(color("#16A34A"));
+        icon.setPadding(dp(12), dp(12), dp(12), dp(12));
+        icon.setBackground(rounded(darkMode ? "#18372C" : "#DDF7E8", dp(32), "#16A34A"));
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(72), dp(72));
+        iconParams.gravity = Gravity.CENTER_HORIZONTAL;
+        content.addView(icon, iconParams);
+        TextView heading = text("Linha do tempo Bluetooth", 20, primary(), Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        content.addView(heading, topMargin(dp(14)));
+        TextView body = text("Aqui vao ficar as postagens dos contatos pareados quando esse modulo for ativado.", 14, secondary(), Typeface.NORMAL);
+        body.setGravity(Gravity.CENTER);
+        body.setLineSpacing(dp(2), 1f);
+        content.addView(body, topMargin(dp(8)));
+        root.addView(content, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1
+        ));
+        root.addView(bottomNavBar(), topMargin(dp(8)));
+
+        setContentView(root);
+        requestInsets(root);
     }
 
     private ImageButton navButton(int drawableId, String description, boolean active, View.OnClickListener listener) {
@@ -682,7 +735,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(profileStore.loadContacts().isEmpty() ? 0 : dp(12), 0, 0, 0);
         top.addView(title, titleParams);
-        top.addView(menuButton());
+        addTopActions(top);
         root.addView(top);
 
         stateText = text("Procurando aparelhos com Bluetooth visivel.", 14, secondary(), Typeface.NORMAL);
@@ -835,6 +888,47 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         new AlertDialog.Builder(this)
                 .setView(content)
                 .setPositiveButton("Copiar chave", (dialog, which) -> copyMessageText(payload))
+                .setNegativeButton("Fechar", null)
+                .show();
+    }
+
+    private void showDownloadQrDialog() {
+        LinearLayout content = vertical();
+        content.setPadding(dp(20), dp(18), dp(20), dp(12));
+        content.setBackgroundColor(color(surface()));
+
+        TextView title = text("Baixar nBTChat", 22, primary(), Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        content.addView(title);
+
+        TextView subtitle = text("Aponte a camera de outro Android para abrir a pagina de download do app.", 14, secondary(), Typeface.NORMAL);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setLineSpacing(dp(2), 1f);
+        content.addView(subtitle, topMargin(dp(8)));
+
+        ImageView qr = new ImageView(this);
+        Bitmap qrBitmap = createQrBitmap(DOWNLOAD_PAGE_URL, dp(248));
+        if (qrBitmap == null) {
+            Toast.makeText(this, "Nao foi possivel gerar o QR de download.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        qr.setImageBitmap(qrBitmap);
+        qr.setPadding(dp(10), dp(10), dp(10), dp(10));
+        qr.setBackground(rounded("#FFFFFF", dp(14), border()));
+        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(268), dp(268));
+        qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+        qrParams.setMargins(0, dp(16), 0, 0);
+        content.addView(qr, qrParams);
+
+        TextView link = text(DOWNLOAD_PAGE_URL, 13, secondary(), Typeface.BOLD);
+        link.setGravity(Gravity.CENTER);
+        link.setTextIsSelectable(true);
+        content.addView(link, topMargin(dp(10)));
+
+        new AlertDialog.Builder(this)
+                .setView(content)
+                .setPositiveButton("Copiar link", (dialog, which) -> copyMessageText(DOWNLOAD_PAGE_URL))
+                .setNeutralButton("Compartilhar", (dialog, which) -> shareApp())
                 .setNegativeButton("Fechar", null)
                 .show();
     }
@@ -1141,7 +1235,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text(saved.isComplete() ? "Editar perfil" : "Criar perfil", 28, primary(), Typeface.BOLD);
         top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        top.addView(menuButton());
+        addTopActions(top);
         root.addView(top);
         TextView subtitle = text("Este perfil aparece quando outro nBTChat se conecta a voce.", 15, secondary(), Typeface.NORMAL);
         root.addView(subtitle, topMargin(dp(6)));
@@ -1259,7 +1353,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         top.addView(who, whoParams);
         updateChatHeaderStatus();
 
-        top.addView(menuButton());
+        addTopActions(top);
         root.addView(top);
 
         messageScroll = new ScrollView(this);
@@ -1615,7 +1709,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
-        top.addView(menuButton());
+        addTopActions(top);
         root.addView(top);
 
         TextView subtitle = text("Gadgets oficiais para usar dentro do nBTChat.", 14, secondary(), Typeface.NORMAL);
@@ -1744,7 +1838,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
-        top.addView(menuButton());
+        addTopActions(top);
         root.addView(top);
 
         TextView subtitle = text("Escolha o texto que aparece quando alguem toca em qualquer numero.", 14, secondary(), Typeface.NORMAL);
@@ -1797,7 +1891,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
-        top.addView(menuButton());
+        addTopActions(top);
         root.addView(top);
 
         TextView subtitle = text("Toque em um numero para abrir a acao configurada.", 14, secondary(), Typeface.NORMAL);
@@ -1886,15 +1980,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void pickChatImage() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("image/*");
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try {
-            startActivityForResult(intent, REQUEST_PICK_CHAT_IMAGE);
-        } catch (Exception ex) {
-            Toast.makeText(this, "Nao foi possivel abrir a galeria.", Toast.LENGTH_LONG).show();
-        }
+        startImagePicker(REQUEST_PICK_CHAT_IMAGE);
     }
 
     private void captureChatImage() {
@@ -2006,6 +2092,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 outputStream.write(Base64.decode(audioBase64, Base64.NO_WRAP));
             }
             playingVoicePlayer = new MediaPlayer();
+            configureVoicePlaybackRoute();
+            playingVoicePlayer.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(settingsStore.playVoiceOnPhone()
+                            ? AudioAttributes.USAGE_VOICE_COMMUNICATION
+                            : AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build());
             playingVoicePlayer.setDataSource(playingVoiceFile.getAbsolutePath());
             playingVoicePlayer.setOnCompletionListener(mp -> {
                 String completedId = playingVoiceId;
@@ -2044,11 +2137,55 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             playingVoiceFile.delete();
             playingVoiceFile = null;
         }
+        resetVoicePlaybackRoute();
         if (!keepButtonState && playingVoiceControls != null) {
             resetVoiceControls(playingVoiceControls);
         }
         playingVoiceControls = null;
         playingVoiceId = "";
+    }
+
+    private void configureVoicePlaybackRoute() {
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager == null) {
+            return;
+        }
+        try {
+            if (settingsStore.playVoiceOnPhone()) {
+                audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    for (AudioDeviceInfo deviceInfo : audioManager.getAvailableCommunicationDevices()) {
+                        if (deviceInfo.getType() == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                            audioManager.setCommunicationDevice(deviceInfo);
+                            return;
+                        }
+                    }
+                }
+                audioManager.setSpeakerphoneOn(true);
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    audioManager.clearCommunicationDevice();
+                }
+                audioManager.setSpeakerphoneOn(false);
+                audioManager.setMode(AudioManager.MODE_NORMAL);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void resetVoicePlaybackRoute() {
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager == null) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice();
+            }
+            audioManager.setSpeakerphoneOn(false);
+            audioManager.setMode(AudioManager.MODE_NORMAL);
+        } catch (Exception ignored) {
+        }
     }
 
     private void scheduleVoiceTicker() {
@@ -2802,7 +2939,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void shareApp() {
-        String url = "https://mbzerker.github.io/nBTChat/";
+        String url = DOWNLOAD_PAGE_URL;
         Intent intent = new Intent(Intent.ACTION_SEND);
         intent.setType("text/plain");
         intent.putExtra(Intent.EXTRA_SUBJECT, "nBTChat");
@@ -2828,6 +2965,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
+        addTopActions(top);
         root.addView(top);
 
         LinearLayout card = vertical();
@@ -2855,20 +2993,50 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         sound.setEllipsize(TextUtils.TruncateAt.END);
         card.addView(sound, topMargin(dp(5)));
 
-        LinearLayout soundActions = horizontal();
-        Button choose = pillButton("Procurar som", "#16A34A", "#FFFFFF");
+        LinearLayout soundActions = vertical();
+        LinearLayout soundPickers = horizontal();
+        Button choose = pillButton("Sons do aparelho", "#16A34A", "#FFFFFF");
         choose.setOnClickListener(v -> pickNotificationSound());
-        soundActions.addView(choose, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        Button clear = pillButton("Padrao", surfaceAlt(), primary());
+        soundPickers.addView(choose, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button file = pillButton("Arquivo", surfaceAlt(), primary());
+        file.setOnClickListener(v -> pickNotificationSoundFile());
+        LinearLayout.LayoutParams fileParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        fileParams.setMargins(dp(8), 0, 0, 0);
+        soundPickers.addView(file, fileParams);
+        soundActions.addView(soundPickers);
+        Button clear = pillButton("Padrao do Android", surfaceAlt(), primary());
         clear.setOnClickListener(v -> {
             settingsStore.clearNotificationSound();
             NotificationHelper.ensureChannels(this);
             showSettingsScreen();
         });
-        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
-        clearParams.setMargins(dp(8), 0, 0, 0);
-        soundActions.addView(clear, clearParams);
+        soundActions.addView(clear, topMargin(dp(8)));
         card.addView(soundActions, topMargin(dp(10)));
+
+        TextView outputTitle = text("Audio das mensagens de voz", 16, primary(), Typeface.BOLD);
+        card.addView(outputTitle, topMargin(dp(20)));
+        TextView outputHint = text(settingsStore.playVoiceOnPhone()
+                ? "Tocando no aparelho."
+                : "Usando Bluetooth ou a rota padrao do sistema.", 13, secondary(), Typeface.NORMAL);
+        card.addView(outputHint, topMargin(dp(5)));
+
+        LinearLayout outputActions = horizontal();
+        boolean phoneOutput = settingsStore.playVoiceOnPhone();
+        Button phone = pillButton("Aparelho", phoneOutput ? "#16A34A" : surfaceAlt(), phoneOutput ? "#FFFFFF" : primary());
+        phone.setOnClickListener(v -> {
+            settingsStore.setVoiceOutput(AppSettingsStore.VOICE_OUTPUT_PHONE);
+            showSettingsScreen();
+        });
+        outputActions.addView(phone, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button bluetooth = pillButton("Bluetooth", phoneOutput ? surfaceAlt() : "#16A34A", phoneOutput ? primary() : "#FFFFFF");
+        bluetooth.setOnClickListener(v -> {
+            settingsStore.setVoiceOutput(AppSettingsStore.VOICE_OUTPUT_BLUETOOTH);
+            showSettingsScreen();
+        });
+        LinearLayout.LayoutParams bluetoothParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        bluetoothParams.setMargins(dp(8), 0, 0, 0);
+        outputActions.addView(bluetooth, bluetoothParams);
+        card.addView(outputActions, topMargin(dp(10)));
 
         root.addView(card, topMargin(dp(18)));
 
@@ -2877,15 +3045,55 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void pickNotificationSound() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("audio/*");
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        Intent intent = new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION);
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true);
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false);
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Som de notificacao");
+        String currentSound = settingsStore.notificationSoundUri();
+        if (!currentSound.isEmpty()) {
+            intent.putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(currentSound));
+        }
         try {
             startActivityForResult(intent, REQUEST_PICK_NOTIFICATION_SOUND);
         } catch (Exception ex) {
-            Toast.makeText(this, "Nao foi possivel abrir os sons do aparelho.", Toast.LENGTH_LONG).show();
+            pickNotificationSoundFile();
         }
+    }
+
+    private void pickNotificationSoundFile() {
+        Intent intent = new Intent(Intent.ACTION_PICK, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI);
+        intent.setType("audio/*");
+        intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, REQUEST_PICK_NOTIFICATION_SOUND_FILE);
+        } catch (Exception ex) {
+            Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+            fallback.setType("audio/*");
+            fallback.addCategory(Intent.CATEGORY_OPENABLE);
+            fallback.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+            fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivityForResult(fallback, REQUEST_PICK_NOTIFICATION_SOUND_FILE);
+            } catch (Exception ignored) {
+                Toast.makeText(this, "Nao foi possivel abrir os sons do aparelho.", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private String displayNameForSoundUri(Uri uri) {
+        try {
+            Ringtone ringtone = RingtoneManager.getRingtone(this, uri);
+            if (ringtone != null) {
+                String title = ringtone.getTitle(this);
+                if (title != null && !title.trim().isEmpty()) {
+                    return title.trim();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return displayNameForUri(uri);
     }
 
     private String displayNameForUri(Uri uri) {
@@ -3124,6 +3332,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showProfileScreen();
         } else if ("settings".equals(currentScreen)) {
             showSettingsScreen();
+        } else if ("updates".equals(currentScreen)) {
+            showUpdatesScreen();
         } else if ("store".equals(currentScreen)) {
             showStoreScreen();
         } else if ("store_config".equals(currentScreen)) {
@@ -3139,14 +3349,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void pickPhoto() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        startImagePicker(REQUEST_PICK_PHOTO);
+    }
+
+    private void startImagePicker(int requestCode) {
+        Intent intent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
         intent.setType("image/*");
+        intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
-            startActivityForResult(intent, REQUEST_PICK_PHOTO);
+            startActivityForResult(intent, requestCode);
         } catch (Exception ex) {
-            Toast.makeText(this, "Nao foi possivel abrir a galeria.", Toast.LENGTH_LONG).show();
+            Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+            fallback.setType("image/*");
+            fallback.addCategory(Intent.CATEGORY_OPENABLE);
+            fallback.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+            fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivityForResult(fallback, requestCode);
+            } catch (Exception ignored) {
+                Toast.makeText(this, "Nao foi possivel abrir a galeria.", Toast.LENGTH_LONG).show();
+            }
         }
     }
 
@@ -3508,6 +3731,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         button.setScaleType(ImageView.ScaleType.CENTER);
         button.setLayoutParams(new LinearLayout.LayoutParams(size, size));
         return button;
+    }
+
+    private void addTopActions(LinearLayout top) {
+        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+        qrParams.setMargins(dp(8), 0, dp(8), 0);
+        top.addView(iconButton(R.drawable.ic_qr_download_24, "QR para baixar o app", dp(42), v -> showDownloadQrDialog()), qrParams);
+        top.addView(menuButton());
     }
 
     private ImageButton menuButton() {

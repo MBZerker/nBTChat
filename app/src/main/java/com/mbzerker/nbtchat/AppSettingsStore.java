@@ -12,6 +12,9 @@ public final class AppSettingsStore {
     private static final String KEY_LAST_CRITICAL_UPDATE = "last_critical_update";
     private static final String KEY_NOTIFICATION_SOUND_URI = "notification_sound_uri";
     private static final String KEY_NOTIFICATION_SOUND_NAME = "notification_sound_name";
+    private static final String KEY_VOICE_OUTPUT = "voice_output";
+    public static final String VOICE_OUTPUT_PHONE = "phone";
+    public static final String VOICE_OUTPUT_BLUETOOTH = "bluetooth";
     private static final long SCAN_PROMPT_INTERVAL_MS = 12L * 60L * 60L * 1000L;
     private static final long SCAN_PROMPT_WINDOW_MS = 3L * 24L * 60L * 60L * 1000L;
 
@@ -49,6 +52,19 @@ public final class AppSettingsStore {
                 .remove(KEY_NOTIFICATION_SOUND_URI)
                 .remove(KEY_NOTIFICATION_SOUND_NAME)
                 .apply();
+    }
+
+    public String voiceOutput() {
+        return prefs.getString(KEY_VOICE_OUTPUT, VOICE_OUTPUT_PHONE);
+    }
+
+    public boolean playVoiceOnPhone() {
+        return VOICE_OUTPUT_PHONE.equals(voiceOutput());
+    }
+
+    public void setVoiceOutput(String output) {
+        String value = VOICE_OUTPUT_BLUETOOTH.equals(output) ? VOICE_OUTPUT_BLUETOOTH : VOICE_OUTPUT_PHONE;
+        prefs.edit().putString(KEY_VOICE_OUTPUT, value).apply();
     }
 
     public boolean shouldPromptNearbyScan(int contactCount) {

@@ -86,7 +86,8 @@ public final class BtChatManager {
     private final IdentityStore identityStore;
     private final RelayStore relayStore;
 
-    private AcceptThread acceptThread;
+    private AcceptThread secureAcceptThread;
+    private AcceptThread insecureAcceptThread;
     private ConnectThread connectThread;
     private ConnectedThread connectedThread;
     private boolean receiverRegistered;
@@ -141,9 +142,13 @@ public final class BtChatManager {
             postError("Este aparelho nao tem Bluetooth disponivel.");
             return;
         }
-        if (acceptThread == null) {
-            acceptThread = new AcceptThread();
-            acceptThread.start();
+        if (secureAcceptThread == null) {
+            secureAcceptThread = new AcceptThread(false);
+            secureAcceptThread.start();
+        }
+        if (insecureAcceptThread == null) {
+            insecureAcceptThread = new AcceptThread(true);
+            insecureAcceptThread.start();
         }
         postState("Pronto para receber conexoes Bluetooth.");
     }
@@ -399,9 +404,13 @@ public final class BtChatManager {
             } catch (SecurityException ignored) {
             }
         }
-        if (acceptThread != null) {
-            acceptThread.cancel();
-            acceptThread = null;
+        if (secureAcceptThread != null) {
+            secureAcceptThread.cancel();
+            secureAcceptThread = null;
+        }
+        if (insecureAcceptThread != null) {
+            insecureAcceptThread.cancel();
+            insecureAcceptThread = null;
         }
         if (connectThread != null) {
             connectThread.cancel();
@@ -552,14 +561,21 @@ public final class BtChatManager {
     }
 
     private final class AcceptThread extends Thread {
+        private final boolean insecure;
         private BluetoothServerSocket serverSocket;
         private boolean running = true;
+
+        AcceptThread(boolean insecure) {
+            this.insecure = insecure;
+        }
 
         @SuppressLint("MissingPermission")
         @Override
         public void run() {
             try {
-                serverSocket = adapter.listenUsingRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID);
+                serverSocket = insecure
+                        ? adapter.listenUsingInsecureRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID)
+                        : adapter.listenUsingRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID);
                 while (running) {
                     BluetoothSocket socket = serverSocket.accept();
                     if (socket != null) {
@@ -571,7 +587,8 @@ public final class BtChatManager {
                 }
             } catch (IOException ex) {
                 if (running) {
-                    postError("Falha ao escutar conexoes Bluetooth: " + ex.getMessage());
+                    String mode = insecure ? "compatibilidade" : "segura";
+                    postError("Falha ao escutar conexoes Bluetooth (" + mode + "): " + ex.getMessage());
                 }
             } catch (SecurityException ex) {
                 postError("Permissao Bluetooth negada para receber conexoes.");
@@ -587,6 +604,7 @@ public final class BtChatManager {
     private final class ConnectThread extends Thread {
         private final BluetoothDevice device;
         private BluetoothSocket socket;
+        private boolean running = true;
 
         ConnectThread(BluetoothDevice device) {
             this.device = device;
@@ -596,18 +614,70 @@ public final class BtChatManager {
         @Override
         public void run() {
             try {
-                socket = device.createRfcommSocketToServiceRecord(SERVICE_UUID);
-                socket.connect();
-                handleSocket(socket, false);
+                BluetoothSocket connectedSocket = connectWithFallbacks();
+                if (running) {
+                    handleSocket(connectedSocket, false);
+                } else {
+                    closeQuietly(connectedSocket);
+                }
             } catch (IOException ex) {
                 closeQuietly(socket);
-                postError("Nao foi possivel conectar. Confirme se o outro aparelho esta visivel e com o nBTChat aberto.");
+                if (running) {
+                    postError("Nao foi possivel conectar. Confirme se o outro aparelho esta visivel, pareado e com o nBTChat aberto.");
+                }
             } catch (SecurityException ex) {
-                postError("Permissao Bluetooth negada para conectar.");
+                if (running) {
+                    postError("Permissao Bluetooth negada para conectar.");
+                }
             }
         }
 
+        @SuppressLint("MissingPermission")
+        private BluetoothSocket connectWithFallbacks() throws IOException {
+            IOException lastError = null;
+            for (int mode = 0; mode < 3 && running; mode++) {
+                BluetoothSocket attempt = null;
+                try {
+                    attempt = createSocketForMode(mode);
+                    socket = attempt;
+                    attempt.connect();
+                    return attempt;
+                } catch (IOException ex) {
+                    lastError = ex;
+                    closeQuietly(attempt);
+                    socket = null;
+                }
+            }
+            if (lastError != null) {
+                throw lastError;
+            }
+            throw new IOException("Conexao cancelada.");
+        }
+
+        @SuppressLint("MissingPermission")
+        private BluetoothSocket createSocketForMode(int mode) throws IOException {
+            if (mode == 0) {
+                return device.createRfcommSocketToServiceRecord(SERVICE_UUID);
+            }
+            if (mode == 1) {
+                return device.createInsecureRfcommSocketToServiceRecord(SERVICE_UUID);
+            }
+            try {
+                java.lang.reflect.Method method = device.getClass().getMethod("createRfcommSocket", int.class);
+                Object result = method.invoke(device, 1);
+                if (result instanceof BluetoothSocket) {
+                    return (BluetoothSocket) result;
+                }
+            } catch (Exception ex) {
+                IOException ioException = new IOException("Fallback Bluetooth indisponivel.");
+                ioException.initCause(ex);
+                throw ioException;
+            }
+            throw new IOException("Fallback Bluetooth invalido.");
+        }
+
         void cancel() {
+            running = false;
             closeQuietly(socket);
         }
     }
