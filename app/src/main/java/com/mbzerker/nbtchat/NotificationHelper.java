@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
 import android.net.Uri;
 import android.os.Build;
 
@@ -46,13 +47,7 @@ public final class NotificationHelper {
         backgroundChannel.setSound(null, null);
         manager.createNotificationChannel(backgroundChannel);
 
-        NotificationChannel messageChannel = new NotificationChannel(
-                MESSAGE_CHANNEL_ID,
-                "Mensagens",
-                NotificationManager.IMPORTANCE_HIGH
-        );
-        messageChannel.setDescription("Mensagens recebidas por Bluetooth.");
-        manager.createNotificationChannel(messageChannel);
+        ensureMessageChannel(context, MESSAGE_CHANNEL_ID, "");
 
         NotificationChannel updateChannel = new NotificationChannel(
                 UPDATE_CHANNEL_ID,
@@ -114,13 +109,17 @@ public final class NotificationHelper {
     }
 
     public static void showMessageNotification(Context context, String remoteAddress, String remoteName, String body, int unread) {
-        if (!new AppSettingsStore(context).notificationsEnabled()) {
+        AppSettingsStore settingsStore = new AppSettingsStore(context);
+        if (!settingsStore.notificationsEnabled()) {
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return;
         }
+        String soundUri = settingsStore.notificationSoundUri();
+        String channelId = messageChannelId(soundUri);
+        ensureMessageChannel(context, channelId, soundUri);
 
         Intent openIntent = new Intent(context, MainActivity.class);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -132,18 +131,53 @@ public final class NotificationHelper {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        android.app.Notification notification = new android.app.Notification.Builder(context, MESSAGE_CHANNEL_ID)
+        android.app.Notification.Builder builder = new android.app.Notification.Builder(context, channelId)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
                 .setContentTitle(remoteName == null || remoteName.trim().isEmpty() ? "Nova mensagem nBTChat" : remoteName)
                 .setContentText(body)
                 .setStyle(new android.app.Notification.BigTextStyle().bigText(body))
                 .setContentIntent(pendingIntent)
                 .setNumber(Math.max(1, unread))
-                .setAutoCancel(true)
-                .build();
+                .setAutoCancel(true);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && soundUri != null && !soundUri.trim().isEmpty()) {
+            builder.setSound(Uri.parse(soundUri));
+        }
+        android.app.Notification notification = builder.build();
 
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         manager.notify(remoteAddress == null ? 44 : remoteAddress.hashCode(), notification);
+    }
+
+    private static void ensureMessageChannel(Context context, String channelId, String soundUri) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        NotificationChannel existing = manager.getNotificationChannel(channelId);
+        if (existing != null) {
+            return;
+        }
+        NotificationChannel messageChannel = new NotificationChannel(
+                channelId,
+                "Mensagens",
+                NotificationManager.IMPORTANCE_HIGH
+        );
+        messageChannel.setDescription("Mensagens recebidas por Bluetooth.");
+        if (soundUri != null && !soundUri.trim().isEmpty()) {
+            AudioAttributes attributes = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build();
+            messageChannel.setSound(Uri.parse(soundUri), attributes);
+        }
+        manager.createNotificationChannel(messageChannel);
+    }
+
+    private static String messageChannelId(String soundUri) {
+        if (soundUri == null || soundUri.trim().isEmpty()) {
+            return MESSAGE_CHANNEL_ID;
+        }
+        return MESSAGE_CHANNEL_ID + "_" + Integer.toHexString(soundUri.hashCode());
     }
 
     public static void showCriticalUpdateNotification(Context context, String versionName, String apkUrl) {

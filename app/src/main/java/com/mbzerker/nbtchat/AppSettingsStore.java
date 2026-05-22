@@ -10,6 +10,8 @@ public final class AppSettingsStore {
     private static final String KEY_SCAN_LAST_PROMPT_AT = "scan_last_prompt_at";
     private static final String KEY_SCAN_DISMISSED = "scan_dismissed";
     private static final String KEY_LAST_CRITICAL_UPDATE = "last_critical_update";
+    private static final String KEY_NOTIFICATION_SOUND_URI = "notification_sound_uri";
+    private static final String KEY_NOTIFICATION_SOUND_NAME = "notification_sound_name";
     private static final long SCAN_PROMPT_INTERVAL_MS = 12L * 60L * 60L * 1000L;
     private static final long SCAN_PROMPT_WINDOW_MS = 3L * 24L * 60L * 60L * 1000L;
 
@@ -25,6 +27,28 @@ public final class AppSettingsStore {
 
     public void setNotificationsEnabled(boolean enabled) {
         prefs.edit().putBoolean(KEY_NOTIFICATIONS_ENABLED, enabled).apply();
+    }
+
+    public String notificationSoundUri() {
+        return prefs.getString(KEY_NOTIFICATION_SOUND_URI, "");
+    }
+
+    public String notificationSoundName() {
+        return prefs.getString(KEY_NOTIFICATION_SOUND_NAME, "");
+    }
+
+    public void setNotificationSound(String uri, String name) {
+        prefs.edit()
+                .putString(KEY_NOTIFICATION_SOUND_URI, uri == null ? "" : uri.trim())
+                .putString(KEY_NOTIFICATION_SOUND_NAME, name == null ? "" : name.trim())
+                .apply();
+    }
+
+    public void clearNotificationSound() {
+        prefs.edit()
+                .remove(KEY_NOTIFICATION_SOUND_URI)
+                .remove(KEY_NOTIFICATION_SOUND_NAME)
+                .apply();
     }
 
     public boolean shouldPromptNearbyScan(int contactCount) {
