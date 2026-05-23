@@ -89,6 +89,7 @@ public final class BtChatManager {
     private final ProfileStore profileStore;
     private final IdentityStore identityStore;
     private final RelayStore relayStore;
+    private final AppSettingsStore settingsStore;
 
     private AcceptThread secureAcceptThread;
     private AcceptThread insecureAcceptThread;
@@ -129,6 +130,7 @@ public final class BtChatManager {
         this.profileStore = new ProfileStore(appContext);
         this.identityStore = new IdentityStore(appContext);
         this.relayStore = new RelayStore(appContext);
+        this.settingsStore = new AppSettingsStore(appContext);
     }
 
     public boolean isBluetoothAvailable() {
@@ -747,6 +749,7 @@ public final class BtChatManager {
                 hello.put("deviceId", identityStore.getDeviceId());
                 hello.put("identityPublicKey", identityStore.getPublicKeyBase64());
                 hello.put("profile", localProfile.toJson());
+                hello.put("allowContactSharing", settingsStore.contactSharingEnabled());
                 writeFrame(hello.toString());
 
                 JSONObject remoteHello = new JSONObject(readFrame());
@@ -760,6 +763,7 @@ public final class BtChatManager {
                 cryptoSession = CryptoSession.derive(handshake, remoteHello.getString("publicKey"));
                 profileStore.saveContact(remoteAddress, remoteProfile);
                 profileStore.saveIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey);
+                profileStore.setContactShareAllowed(remoteAddress, remoteHello.optBoolean("allowContactSharing", false));
 
                 mainHandler.post(() -> listener.onRemoteProfile(remoteAddress, remoteProfile));
                 mainHandler.post(() -> listener.onRemoteIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey));
@@ -879,6 +883,7 @@ public final class BtChatManager {
                     profile.put("deviceId", identityStore.getDeviceId());
                     profile.put("identityPublicKey", identityStore.getPublicKeyBase64());
                     profile.put("profile", profileStore.loadLocalProfile().toJson());
+                    profile.put("allowContactSharing", settingsStore.contactSharingEnabled());
                     writeFrame(cryptoSession.encrypt(profile).toString());
                 } catch (Exception ignored) {
                 }
@@ -1010,6 +1015,7 @@ public final class BtChatManager {
             String identityPublicKey = profileJson.optString("identityPublicKey", "");
             profileStore.saveContact(remoteAddress, profile);
             profileStore.saveIdentity(remoteAddress, deviceId, identityPublicKey);
+            profileStore.setContactShareAllowed(remoteAddress, profileJson.optBoolean("allowContactSharing", false));
             mainHandler.post(() -> listener.onRemoteIdentity(remoteAddress, deviceId, identityPublicKey));
             mainHandler.post(() -> listener.onRemoteProfile(remoteAddress, profile));
         }

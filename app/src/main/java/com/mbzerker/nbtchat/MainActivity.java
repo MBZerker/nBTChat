@@ -2904,6 +2904,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!payload.deviceId.isEmpty()) {
             profileStore.saveIdentity(payload.address, payload.deviceId, payload.publicKey);
         }
+        profileStore.setContactShareAllowed(payload.address, payload.allowContactSharing);
         Toast.makeText(this, "Contato salvo.", Toast.LENGTH_SHORT).show();
         if ("home".equals(currentScreen)) {
             renderContactList();
@@ -3787,14 +3788,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout privacyRow = horizontal();
         privacyRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout privacyText = vertical();
-        privacyText.addView(text("Compartilhar contatos Bluetooth", 16, primary(), Typeface.BOLD));
-        TextView privacyHint = text("Permite enviar dados Bluetooth de contatos salvos para outro contato.", 13, secondary(), Typeface.NORMAL);
+        privacyText.addView(text("Permitir compartilharem meu contato", 16, primary(), Typeface.BOLD));
+        TextView privacyHint = text("Se desligado, seus contatos nao devem repassar seus dados Bluetooth pelo nBTChat.", 13, secondary(), Typeface.NORMAL);
         privacyHint.setLineSpacing(dp(2), 1f);
         privacyText.addView(privacyHint, topMargin(dp(3)));
         privacyRow.addView(privacyText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         Switch privacyToggle = new Switch(this);
         privacyToggle.setChecked(settingsStore.contactSharingEnabled());
-        privacyToggle.setOnCheckedChangeListener((buttonView, isChecked) -> settingsStore.setContactSharingEnabled(isChecked));
+        privacyToggle.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            settingsStore.setContactSharingEnabled(isChecked);
+            btChatManager.sendProfileUpdate();
+            notifyProfileUpdated();
+        });
         privacyRow.addView(privacyToggle);
         card.addView(privacyRow, topMargin(dp(20)));
 
@@ -3880,10 +3885,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         PopupMenu menu = new PopupMenu(this, anchor);
         boolean muted = profileStore.isMuted(address);
         boolean blocked = profileStore.isBlocked(address);
+        boolean shareAllowed = profileStore.isContactShareAllowed(address);
         menu.getMenu().add(0, 1, 0, "Apagar conversa");
         menu.getMenu().add(0, 2, 1, muted ? "Ativar notificacoes" : "Silenciar contato");
         menu.getMenu().add(0, 3, 2, blocked ? "Desbloquear contato" : "Bloquear contato");
-        menu.getMenu().add(0, 5, 3, settingsStore.contactSharingEnabled() ? "Compartilhar contato Bluetooth" : "Compartilhar contato desativado");
+        menu.getMenu().add(0, 5, 3, shareAllowed ? "Compartilhar contato Bluetooth" : "Contato nao permite compartilhar");
         menu.getMenu().add(0, 4, 4, "Remover contato e pareamento");
         menu.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) {
@@ -3910,8 +3916,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 return true;
             }
             if (item.getItemId() == 5) {
-                if (!settingsStore.contactSharingEnabled()) {
-                    Toast.makeText(this, "Ative em Configuracoes > Privacidade para compartilhar contatos Bluetooth.", Toast.LENGTH_LONG).show();
+                if (!profileStore.isContactShareAllowed(address)) {
+                    Toast.makeText(this, "Este contato nao permitiu que os dados Bluetooth dele sejam compartilhados.", Toast.LENGTH_LONG).show();
                     return true;
                 }
                 showContactShareChooser(address);
@@ -3966,6 +3972,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (sourceAddress == null || sourceAddress.trim().isEmpty()) {
             return null;
         }
+        if (!profileStore.isContactShareAllowed(sourceAddress)) {
+            return null;
+        }
         UserProfile profile = profileStore.loadContact(sourceAddress);
         ProfileStore.ContactIdentity identity = profileStore.loadIdentity(sourceAddress);
         BtChatManager.DeviceCandidate candidate = btChatManager.getPairedCandidate(sourceAddress);
@@ -3975,7 +3984,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 && (identity.deviceId == null || identity.deviceId.isEmpty())) {
             return null;
         }
-        return new ContactCardPayload(sourceAddress, bluetoothName, identity.deviceId, identity.identityPublicKey, profile, name);
+        return new ContactCardPayload(sourceAddress, bluetoothName, identity.deviceId, identity.identityPublicKey, profile, name, true);
     }
 
     private void sendContactCardToAddress(String address, ContactCardPayload payload) {
@@ -4669,14 +4678,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         final String publicKey;
         final UserProfile profile;
         final String name;
+        final boolean allowContactSharing;
 
-        ContactCardPayload(String address, String bluetoothName, String deviceId, String publicKey, UserProfile profile, String name) {
+        ContactCardPayload(String address, String bluetoothName, String deviceId, String publicKey, UserProfile profile, String name, boolean allowContactSharing) {
             this.address = address == null ? "" : address.trim();
             this.bluetoothName = bluetoothName == null ? "" : bluetoothName.trim();
             this.deviceId = deviceId == null ? "" : deviceId.trim();
             this.publicKey = publicKey == null ? "" : publicKey.trim();
             this.profile = profile == null ? UserProfile.empty() : profile;
             this.name = name == null ? "" : name.trim();
+            this.allowContactSharing = allowContactSharing;
         }
 
         String toJson() {
@@ -4689,6 +4700,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 json.put("publicKey", publicKey);
                 json.put("name", name);
                 json.put("profile", profile.toJson());
+                json.put("allowContactSharing", allowContactSharing);
                 return json.toString();
             } catch (Exception ignored) {
                 return "";
@@ -4715,7 +4727,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         json.optString("deviceId", ""),
                         json.optString("publicKey", ""),
                         profile,
-                        name
+                        name,
+                        json.optBoolean("allowContactSharing", false)
                 );
             } catch (Exception ignored) {
                 return null;

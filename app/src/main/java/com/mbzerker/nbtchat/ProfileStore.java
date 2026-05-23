@@ -17,6 +17,7 @@ public final class ProfileStore {
     private static final String CONTACT_FLAGS_PREFS = "contact_flags";
     private static final String KEY_MUTED_PREFIX = "muted:";
     private static final String KEY_BLOCKED_PREFIX = "blocked:";
+    private static final String KEY_SHARE_ALLOWED_PREFIX = "share_allowed:";
     private static final String KEY_NAME = "name";
     private static final String KEY_STATUS = "status";
     private static final String KEY_GENDER = "gender";
@@ -138,6 +139,7 @@ public final class ProfileStore {
         contactFlagsPrefs.edit()
                 .remove(KEY_MUTED_PREFIX + address)
                 .remove(KEY_BLOCKED_PREFIX + address)
+                .remove(KEY_SHARE_ALLOWED_PREFIX + address)
                 .apply();
     }
 
@@ -161,6 +163,17 @@ public final class ProfileStore {
             return;
         }
         contactFlagsPrefs.edit().putBoolean(KEY_BLOCKED_PREFIX + address, blocked).apply();
+    }
+
+    public boolean isContactShareAllowed(String address) {
+        return address != null && contactFlagsPrefs.getBoolean(KEY_SHARE_ALLOWED_PREFIX + address, false);
+    }
+
+    public void setContactShareAllowed(String address, boolean allowed) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        contactFlagsPrefs.edit().putBoolean(KEY_SHARE_ALLOWED_PREFIX + address, allowed).apply();
     }
 
     public ContactIdentity loadIdentity(String address) {
