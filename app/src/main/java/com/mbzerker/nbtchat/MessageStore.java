@@ -1,7 +1,6 @@
 package com.mbzerker.nbtchat;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -40,12 +39,12 @@ public final class MessageStore {
     private static final String KEY_UNREAD_PREFIX = "unread:";
     private static final int MAX_MESSAGES_PER_CHAT = 500;
 
-    private final SharedPreferences messagePrefs;
-    private final SharedPreferences metaPrefs;
+    private final EncryptedPrefs messagePrefs;
+    private final EncryptedPrefs metaPrefs;
 
     public MessageStore(Context context) {
-        messagePrefs = context.getSharedPreferences(MESSAGE_PREFS, Context.MODE_PRIVATE);
-        metaPrefs = context.getSharedPreferences(META_PREFS, Context.MODE_PRIVATE);
+        messagePrefs = new EncryptedPrefs(context, MESSAGE_PREFS);
+        metaPrefs = new EncryptedPrefs(context, META_PREFS);
     }
 
     public synchronized void addMessage(String address, String body, boolean mine, long sentAt, boolean incrementUnread) {

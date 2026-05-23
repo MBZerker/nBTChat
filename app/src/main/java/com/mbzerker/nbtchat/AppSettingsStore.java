@@ -1,7 +1,6 @@
 package com.mbzerker.nbtchat;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 public final class AppSettingsStore {
     private static final String PREFS = "app_settings";
@@ -23,10 +22,10 @@ public final class AppSettingsStore {
     private static final long SCAN_PROMPT_INTERVAL_MS = 12L * 60L * 60L * 1000L;
     private static final long SCAN_PROMPT_WINDOW_MS = 3L * 24L * 60L * 60L * 1000L;
 
-    private final SharedPreferences prefs;
+    private final EncryptedPrefs prefs;
 
     public AppSettingsStore(Context context) {
-        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs = new EncryptedPrefs(context, PREFS);
     }
 
     public boolean notificationsEnabled() {

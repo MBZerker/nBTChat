@@ -1,7 +1,6 @@
 package com.mbzerker.nbtchat;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -17,12 +16,12 @@ public final class RelayStore {
     private static final String RELAY_PREFS = "relay_queue";
     private static final String SEEN_PREFS = "relay_seen";
 
-    private final SharedPreferences relayPrefs;
-    private final SharedPreferences seenPrefs;
+    private final EncryptedPrefs relayPrefs;
+    private final EncryptedPrefs seenPrefs;
 
     public RelayStore(Context context) {
-        relayPrefs = context.getSharedPreferences(RELAY_PREFS, Context.MODE_PRIVATE);
-        seenPrefs = context.getSharedPreferences(SEEN_PREFS, Context.MODE_PRIVATE);
+        relayPrefs = new EncryptedPrefs(context, RELAY_PREFS);
+        seenPrefs = new EncryptedPrefs(context, SEEN_PREFS);
     }
 
     public synchronized boolean rememberSeen(String id) {

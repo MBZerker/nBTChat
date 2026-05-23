@@ -1,7 +1,6 @@
 package com.mbzerker.nbtchat;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -24,10 +23,10 @@ public final class GadgetStore {
     private static final String KEY_TABLE_100_CHOICES = "table100_choices";
     private static final long WEEK_MS = 7L * 24L * 60L * 60L * 1000L;
 
-    private final SharedPreferences prefs;
+    private final EncryptedPrefs prefs;
 
     public GadgetStore(Context context) {
-        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs = new EncryptedPrefs(context, PREFS);
     }
 
     public boolean hasTable100() {

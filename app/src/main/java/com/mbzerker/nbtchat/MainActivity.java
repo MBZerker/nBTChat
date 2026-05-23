@@ -310,8 +310,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         } else if (requestCode == REQUEST_CAPTURE_PHOTO && resultCode == RESULT_OK && data != null) {
             if (pendingCameraUri != null) {
-                updateEditingPhoto(compressProfileImage(pendingCameraUri));
+                String photo = compressProfileImage(pendingCameraUri);
+                deleteCameraUri(pendingCameraUri);
                 pendingCameraUri = null;
+                updateEditingPhoto(photo);
             } else {
                 Object photo = data.getExtras() == null ? null : data.getExtras().get("data");
                 if (photo instanceof Bitmap) {
@@ -320,15 +322,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         } else if (requestCode == REQUEST_CAPTURE_PHOTO && resultCode == RESULT_OK) {
             if (pendingCameraUri != null) {
-                updateEditingPhoto(compressProfileImage(pendingCameraUri));
+                String photo = compressProfileImage(pendingCameraUri);
+                deleteCameraUri(pendingCameraUri);
                 pendingCameraUri = null;
+                updateEditingPhoto(photo);
             }
         } else if (requestCode == REQUEST_CAPTURE_PHOTO) {
             if (pendingCameraUri != null) {
-                try {
-                    getContentResolver().delete(pendingCameraUri, null, null);
-                } catch (Exception ignored) {
-                }
+                deleteCameraUri(pendingCameraUri);
             }
             pendingCameraUri = null;
         } else if (requestCode == REQUEST_PICK_CHAT_IMAGE && resultCode == RESULT_OK && data != null) {
@@ -338,10 +339,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         } else if (requestCode == REQUEST_CAPTURE_CHAT_IMAGE && resultCode == RESULT_OK) {
             if (pendingCameraUri != null) {
-                sendImageMessage(compressChatImage(pendingCameraUri));
+                String image = compressChatImage(pendingCameraUri);
+                deleteCameraUri(pendingCameraUri);
                 pendingCameraUri = null;
+                sendImageMessage(image);
             }
         } else if (requestCode == REQUEST_CAPTURE_CHAT_IMAGE) {
+            if (pendingCameraUri != null) {
+                deleteCameraUri(pendingCameraUri);
+            }
             pendingCameraUri = null;
         } else if (requestCode == REQUEST_SCAN_QR && resultCode == RESULT_OK && data != null) {
             handleQrInvite(data.getStringExtra(QrScannerActivity.EXTRA_QR_TEXT));
@@ -4345,6 +4351,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private void deleteCameraUri(Uri uri) {
+        if (uri == null) {
+            return;
+        }
+        try {
+            getContentResolver().delete(uri, null, null);
+        } catch (Exception ignored) {
         }
     }
 

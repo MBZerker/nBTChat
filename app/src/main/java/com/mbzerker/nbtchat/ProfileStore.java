@@ -1,7 +1,6 @@
 package com.mbzerker.nbtchat;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -23,18 +22,18 @@ public final class ProfileStore {
     private static final String KEY_GENDER = "gender";
     private static final String KEY_PHOTO = "photo";
 
-    private final SharedPreferences profilePrefs;
-    private final SharedPreferences contactPrefs;
-    private final SharedPreferences fingerprintPrefs;
-    private final SharedPreferences identityPrefs;
-    private final SharedPreferences contactFlagsPrefs;
+    private final EncryptedPrefs profilePrefs;
+    private final EncryptedPrefs contactPrefs;
+    private final EncryptedPrefs fingerprintPrefs;
+    private final EncryptedPrefs identityPrefs;
+    private final EncryptedPrefs contactFlagsPrefs;
 
     public ProfileStore(Context context) {
-        profilePrefs = context.getSharedPreferences(PROFILE_PREFS, Context.MODE_PRIVATE);
-        contactPrefs = context.getSharedPreferences(CONTACT_PREFS, Context.MODE_PRIVATE);
-        fingerprintPrefs = context.getSharedPreferences(FINGERPRINT_PREFS, Context.MODE_PRIVATE);
-        identityPrefs = context.getSharedPreferences(IDENTITY_PREFS, Context.MODE_PRIVATE);
-        contactFlagsPrefs = context.getSharedPreferences(CONTACT_FLAGS_PREFS, Context.MODE_PRIVATE);
+        profilePrefs = new EncryptedPrefs(context, PROFILE_PREFS);
+        contactPrefs = new EncryptedPrefs(context, CONTACT_PREFS);
+        fingerprintPrefs = new EncryptedPrefs(context, FINGERPRINT_PREFS);
+        identityPrefs = new EncryptedPrefs(context, IDENTITY_PREFS);
+        contactFlagsPrefs = new EncryptedPrefs(context, CONTACT_FLAGS_PREFS);
     }
 
     public boolean hasLocalProfile() {

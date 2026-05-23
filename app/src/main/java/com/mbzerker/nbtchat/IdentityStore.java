@@ -1,7 +1,6 @@
 package com.mbzerker.nbtchat;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.util.Base64;
 
 import java.security.KeyFactory;
@@ -20,10 +19,10 @@ public final class IdentityStore {
     private static final String KEY_PUBLIC = "public";
     private static final String KEY_PRIVATE = "private";
 
-    private final SharedPreferences prefs;
+    private final EncryptedPrefs prefs;
 
     public IdentityStore(Context context) {
-        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs = new EncryptedPrefs(context, PREFS);
         ensureIdentity();
     }
 

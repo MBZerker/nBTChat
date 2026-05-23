@@ -1,7 +1,6 @@
 package com.mbzerker.nbtchat;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.content.res.Configuration;
 
 public final class ThemeStore {
@@ -9,11 +8,11 @@ public final class ThemeStore {
     private static final String KEY_DARK = "dark";
 
     private final Context context;
-    private final SharedPreferences prefs;
+    private final EncryptedPrefs prefs;
 
     public ThemeStore(Context context) {
         this.context = context.getApplicationContext();
-        this.prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this.prefs = new EncryptedPrefs(context, PREFS);
     }
 
     public boolean isDarkMode() {
