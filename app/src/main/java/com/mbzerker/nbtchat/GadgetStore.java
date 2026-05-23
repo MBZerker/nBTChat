@@ -92,7 +92,18 @@ public final class GadgetStore {
     }
 
     public Table100Payload table100Payload() {
-        return new Table100Payload(table100InstanceId(), table100OwnerMessage(), table100CopyText(), table100OwnerContact());
+        String tableId = table100InstanceId();
+        return new Table100Payload(tableId, table100OwnerMessage(), table100CopyText(), table100OwnerContact(), lockedNumbers(tableId));
+    }
+
+    public List<Integer> lockedNumbers(String tableId) {
+        List<Integer> numbers = new ArrayList<>();
+        for (Table100Choice choice : loadChoices(tableId)) {
+            if (choice.number >= 1 && choice.number <= 100 && !numbers.contains(choice.number)) {
+                numbers.add(choice.number);
+            }
+        }
+        return numbers;
     }
 
     public void saveChoice(String tableId, String address, int number, String name, boolean confirmed) {
@@ -196,12 +207,18 @@ public final class GadgetStore {
         public final String ownerMessage;
         public final String copyText;
         public final String ownerContact;
+        public final List<Integer> lockedNumbers;
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact) {
+            this(tableId, ownerMessage, copyText, ownerContact, new ArrayList<>());
+        }
+
+        Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact, List<Integer> lockedNumbers) {
             this.tableId = tableId == null ? "" : tableId;
             this.ownerMessage = ownerMessage == null ? "" : ownerMessage;
             this.copyText = copyText == null ? "" : copyText;
             this.ownerContact = ownerContact == null ? "" : ownerContact;
+            this.lockedNumbers = cleanLockedNumbers(lockedNumbers);
         }
 
         public String toMessageBody() {
@@ -212,10 +229,15 @@ public final class GadgetStore {
                 json.put("ownerMessage", ownerMessage);
                 json.put("copyText", copyText);
                 json.put("ownerContact", ownerContact);
+                json.put("lockedNumbers", numbersToJson(lockedNumbers));
                 return json.toString();
             } catch (JSONException ignored) {
                 return copyText;
             }
+        }
+
+        public boolean hasLockedNumber(int number) {
+            return lockedNumbers.contains(number);
         }
 
         public static Table100Payload parse(String raw) {
@@ -229,12 +251,48 @@ public final class GadgetStore {
                             json.optString("tableId", ""),
                             json.optString("ownerMessage", ""),
                             json.optString("copyText", ""),
-                            json.optString("ownerContact", "")
+                            json.optString("ownerContact", ""),
+                            numbersFromJson(json.optJSONArray("lockedNumbers"))
                     );
                 }
             } catch (JSONException ignored) {
             }
             return new Table100Payload("", "", raw.trim(), "");
+        }
+
+        private static List<Integer> cleanLockedNumbers(List<Integer> numbers) {
+            List<Integer> clean = new ArrayList<>();
+            if (numbers == null) {
+                return clean;
+            }
+            for (Integer value : numbers) {
+                if (value != null && value >= 1 && value <= 100 && !clean.contains(value)) {
+                    clean.add(value);
+                }
+            }
+            return clean;
+        }
+
+        private static JSONArray numbersToJson(List<Integer> numbers) {
+            JSONArray array = new JSONArray();
+            for (Integer number : cleanLockedNumbers(numbers)) {
+                array.put(number);
+            }
+            return array;
+        }
+
+        private static List<Integer> numbersFromJson(JSONArray array) {
+            List<Integer> numbers = new ArrayList<>();
+            if (array == null) {
+                return numbers;
+            }
+            for (int i = 0; i < array.length(); i++) {
+                int number = array.optInt(i, 0);
+                if (number >= 1 && number <= 100 && !numbers.contains(number)) {
+                    numbers.add(number);
+                }
+            }
+            return numbers;
         }
     }
 

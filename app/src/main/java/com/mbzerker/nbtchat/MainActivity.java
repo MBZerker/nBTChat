@@ -1752,7 +1752,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String replyToId = activeReplyId();
         String replyPreview = activeReplyPreview();
         messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_TEXT, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
-        addMessageBubble(id, body, true, MessageStore.KIND_TEXT, "", 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        addMessageBubble(id, body, true, MessageStore.KIND_TEXT, "", 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, sentAt, true);
         sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_TEXT, body, "", 0L, sentAt, replyToId, replyPreview);
         clearPendingReply();
     }
@@ -1831,7 +1831,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String cleanKind = kind == null || kind.isEmpty() ? MessageStore.KIND_IMAGE : kind;
         String cleanBody = body == null ? "" : body;
         messageStore.addMessage(currentRemoteAddress, id, cleanKind, cleanBody, mediaBase64, 0L, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
-        addMessageBubble(id, cleanBody, true, cleanKind, mediaBase64, 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        addMessageBubble(id, cleanBody, true, cleanKind, mediaBase64, 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, sentAt, true);
         sendOrQueueOutgoing(currentRemoteAddress, id, cleanKind, cleanBody, mediaBase64, 0L, sentAt, replyToId, replyPreview);
         clearPendingReply();
     }
@@ -1926,7 +1926,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String replyToId = activeReplyId();
         String replyPreview = activeReplyPreview();
         messageStore.addMessage(currentRemoteAddress, id, MessageStore.KIND_VOICE, "", audioBase64, durationMs, true, sentAt, MessageStore.STATUS_PENDING, false, replyToId, replyPreview);
-        addMessageBubble(id, "", true, MessageStore.KIND_VOICE, audioBase64, durationMs, MessageStore.STATUS_PENDING, replyToId, replyPreview, true);
+        addMessageBubble(id, "", true, MessageStore.KIND_VOICE, audioBase64, durationMs, MessageStore.STATUS_PENDING, replyToId, replyPreview, sentAt, true);
         sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_VOICE, "", audioBase64, durationMs, sentAt, replyToId, replyPreview);
         clearPendingReply();
     }
@@ -1940,7 +1940,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showStoreScreen();
             return;
         }
-        GadgetStore.Table100Payload payload = gadgetStore.table100Payload();
+        GadgetStore.Table100Payload payload = table100PayloadWithKnownLocks(gadgetStore.table100Payload());
         if (payload.copyText.trim().isEmpty()) {
             Toast.makeText(this, "Configure a Tabela 100 antes de enviar.", Toast.LENGTH_LONG).show();
             showTable100ConfigScreen();
@@ -1955,6 +1955,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if ("home".equals(currentScreen)) {
             renderContactList();
         }
+    }
+
+    private GadgetStore.Table100Payload table100PayloadWithKnownLocks(GadgetStore.Table100Payload payload) {
+        if (payload == null) {
+            return new GadgetStore.Table100Payload("", "", "", "");
+        }
+        List<Integer> lockedNumbers = new ArrayList<>(payload.lockedNumbers);
+        for (Integer number : gadgetStore.lockedNumbers(payload.tableId)) {
+            if (number != null && !lockedNumbers.contains(number)) {
+                lockedNumbers.add(number);
+            }
+        }
+        return new GadgetStore.Table100Payload(payload.tableId, payload.ownerMessage, payload.copyText, payload.ownerContact, lockedNumbers);
+    }
+
+    private String table100BodyWithKnownLocks(String body) {
+        return table100PayloadWithKnownLocks(GadgetStore.Table100Payload.parse(body)).toMessageBody();
     }
 
     private void showStoreScreen() {
@@ -2552,6 +2569,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return String.format(Locale.getDefault(), "%02d:%02d", totalSeconds / 60L, totalSeconds % 60L);
     }
 
+    private String formatMessageTime(long when) {
+        long value = when > 0L ? when : System.currentTimeMillis();
+        return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(value));
+    }
+
     private void renderChatHistory(boolean scrollBottom) {
         if (messageList == null) {
             return;
@@ -2565,7 +2587,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             addSystemMessage("Conversa criptografada por Bluetooth.");
         } else {
             for (MessageStore.ChatMessage message : history) {
-                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, message.replyToId, message.replyPreview, false);
+                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, message.replyToId, message.replyPreview, message.sentAt, false);
             }
         }
         if (scrollBottom) {
@@ -2729,14 +2751,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void addMessageBubble(String body, boolean mine) {
-        addMessageBubble("", body, mine, MessageStore.KIND_TEXT, "", 0L, mine ? MessageStore.STATUS_SENT : MessageStore.STATUS_DELIVERED, "", "", true);
+        addMessageBubble("", body, mine, MessageStore.KIND_TEXT, "", 0L, mine ? MessageStore.STATUS_SENT : MessageStore.STATUS_DELIVERED, "", "", System.currentTimeMillis(), true);
     }
 
     private void addMessageBubble(String body, boolean mine, String kind, String mediaBase64, long durationMs, String status) {
-        addMessageBubble("", body, mine, kind, mediaBase64, durationMs, status, "", "", true);
+        addMessageBubble("", body, mine, kind, mediaBase64, durationMs, status, "", "", System.currentTimeMillis(), true);
     }
 
     private void addMessageBubble(String id, String body, boolean mine, String kind, String mediaBase64, long durationMs, String status, String replyToId, String replyPreview, boolean scrollBottom) {
+        addMessageBubble(id, body, mine, kind, mediaBase64, durationMs, status, replyToId, replyPreview, System.currentTimeMillis(), scrollBottom);
+    }
+
+    private void addMessageBubble(String id, String body, boolean mine, String kind, String mediaBase64, long durationMs, String status, String replyToId, String replyPreview, long sentAt, boolean scrollBottom) {
         if (messageList == null) {
             showChatScreen(currentRemoteProfile, currentFingerprint);
         }
@@ -2824,14 +2850,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else {
             addTextContentToBubble(bubble, id, body, mine);
         }
+        LinearLayout footer = horizontal();
+        footer.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        TextView sentTime = text(formatMessageTime(sentAt), 11, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL);
+        sentTime.setGravity(Gravity.RIGHT);
+        footer.addView(sentTime);
         if (mine) {
             TextView receipt = text(statusIcon(status), 11, statusColor(status), Typeface.BOLD);
             receipt.setGravity(Gravity.RIGHT);
             if (id != null && !id.isEmpty()) {
                 receiptViews.put(id, receipt);
             }
-            bubble.addView(receipt, topMargin(dp(3)));
+            footer.addView(receipt, leftMargin(dp(6), LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
+        bubble.addView(footer, topMargin(dp(3)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -2960,10 +2992,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private String table100CellColor(GadgetStore.Table100Payload payload, int number, boolean owner, boolean fullScreen, boolean mine) {
         int status = table100NumberStatus(payload, number, owner);
-        if (status == 2) {
-            return "#16A34A";
-        }
-        if (status == 1) {
+        if (status != 0) {
             return darkMode ? "#4B5563" : "#9CA3AF";
         }
         if (!fullScreen) {
@@ -2989,10 +3018,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (payload == null || payload.tableId.isEmpty()) {
             return 0;
         }
-        if (!owner) {
-            return gadgetStore.choiceStatus(payload.tableId, currentRemoteAddress, number);
-        }
-        int status = 0;
+        int status = payload.hasLockedNumber(number) ? 1 : 0;
         for (GadgetStore.Table100Choice choice : gadgetStore.loadChoices(payload.tableId)) {
             if (choice.number == number) {
                 status = choice.confirmed ? 2 : Math.max(status, 1);
@@ -3011,11 +3037,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         int status = table100NumberStatus(payload, number, false);
         if (status != 0) {
-            if (status == 2) {
-                showTable100ResultDialog(number, payload);
-            } else {
-                Toast.makeText(this, "Este numero ja foi escolhido e esta aguardando confirmacao.", Toast.LENGTH_LONG).show();
-            }
+            Toast.makeText(this, "Este numero ja foi escolhido.", Toast.LENGTH_LONG).show();
             return;
         }
         new AlertDialog.Builder(this)
@@ -3023,6 +3045,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setMessage("Voce escolheu o numero " + number + ", deseja confirmar sua escolha?")
                 .setPositiveButton("Sim", (dialog, which) -> {
                     markTable100Choice(payload, number);
+                    refreshTable100PlayScreen();
                     showTable100ResultDialog(number, payload);
                 })
                 .setNegativeButton("Nao", null)
@@ -3475,7 +3498,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 btChatManager.sendReceipt(address, id, MessageStore.STATUS_READ);
             }
             if (inserted) {
-                addMessageBubble(id, body, false, kind, mediaBase64, durationMs, MessageStore.STATUS_DELIVERED, replyToId, replyPreview, true);
+                addMessageBubble(id, body, false, kind, mediaBase64, durationMs, MessageStore.STATUS_DELIVERED, replyToId, replyPreview, sentAt, true);
             }
         } else if ("home".equals(currentScreen)) {
             renderContactList();
@@ -3632,7 +3655,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             MessageStore.ChatMessage message = messageStore.findMessage(address, id);
             if (message != null) {
-                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, message.replyToId, message.replyPreview, true);
+                addMessageBubble(message.id, message.body, message.mine, message.kind, message.mediaBase64, message.durationMs, message.status, message.replyToId, message.replyPreview, message.sentAt, true);
             }
         } else if ("home".equals(currentScreen)) {
             renderContactList();
@@ -4182,6 +4205,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String id = messageStore.createId();
         String body = source.body == null ? "" : source.body;
         String media = source.mediaBase64 == null ? "" : source.mediaBase64;
+        if (MessageStore.KIND_TABLE_100.equals(source.kind)) {
+            body = table100BodyWithKnownLocks(body);
+        }
         messageStore.addMessage(address, id, source.kind, body, media, source.durationMs, true, sentAt, MessageStore.STATUS_PENDING, false);
         sendOrQueueOutgoing(address, id, source.kind, body, media, source.durationMs, sentAt);
         Toast.makeText(this, "Mensagem compartilhada no nBTChat.", Toast.LENGTH_SHORT).show();
@@ -4538,7 +4564,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void setCellTextForStatus(Button cell, int status, int number, boolean fullScreen, boolean mine) {
-        if (status == 1) {
+        if (status != 0) {
             addChoiceXOverlay(cell);
             return;
         }
