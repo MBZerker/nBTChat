@@ -317,6 +317,58 @@ public final class BtChatManager {
     }
 
     @SuppressLint("MissingPermission")
+    public boolean wakeForMessage(String address) {
+        if (adapter == null || address == null || address.trim().isEmpty()) {
+            return false;
+        }
+        DeviceCandidate paired = getPairedCandidate(address);
+        if (paired != null) {
+            if (!isConnectedTo(address)) {
+                connect(paired);
+            }
+            return true;
+        }
+        ProfileStore.ContactIdentity identity = profileStore.loadIdentity(address);
+        if ((identity.deviceId == null || identity.deviceId.isEmpty())
+                && (identity.identityPublicKey == null || identity.identityPublicKey.isEmpty())) {
+            return false;
+        }
+        DeviceCandidate direct = getDirectCandidate(address, identity.bluetoothName);
+        if (direct == null || direct.device == null) {
+            postError("Nao consegui acordar este contato. Deixe o outro aparelho visivel ou pareie pelo Android.");
+            return false;
+        }
+        connectDirect(direct);
+        return true;
+    }
+
+    @SuppressLint("MissingPermission")
+    public boolean repairPairingForMessage(String address) {
+        if (adapter == null || address == null || address.trim().isEmpty()) {
+            return false;
+        }
+        DeviceCandidate paired = getPairedCandidate(address);
+        if (paired == null || paired.device == null) {
+            return wakeForMessage(address);
+        }
+        try {
+            postState("Refazendo pareamento Bluetooth para tentar corrigir erro de PIN...");
+            java.lang.reflect.Method method = paired.device.getClass().getMethod("removeBond");
+            method.invoke(paired.device);
+            mainHandler.postDelayed(() -> {
+                DeviceCandidate direct = getDirectCandidate(address, profileStore.loadIdentity(address).bluetoothName);
+                if (direct != null) {
+                    connectDirect(direct);
+                }
+            }, 2500L);
+            return true;
+        } catch (Exception ex) {
+            postError("Nao consegui refazer o pareamento automaticamente. Remova e pareie novamente no Android.");
+            return false;
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     public void connect(DeviceCandidate candidate) {
         if (candidate == null || candidate.device == null) {
             return;
@@ -762,7 +814,7 @@ public final class BtChatManager {
                 remoteIdentityPublicKey = remoteHello.optString("identityPublicKey", "");
                 cryptoSession = CryptoSession.derive(handshake, remoteHello.getString("publicKey"));
                 profileStore.saveContact(remoteAddress, remoteProfile);
-                profileStore.saveIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey);
+                profileStore.saveIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey, safeName(socket.getRemoteDevice()));
                 profileStore.setContactShareAllowed(remoteAddress, remoteHello.optBoolean("allowContactSharing", false));
 
                 mainHandler.post(() -> listener.onRemoteProfile(remoteAddress, remoteProfile));

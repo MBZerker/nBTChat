@@ -142,6 +142,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final String UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/update.json";
     private static final String DOWNLOAD_PAGE_URL = "https://mbzerker.github.io/nBTChat/";
     private static final Pattern LINK_PATTERN = Pattern.compile("(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)");
+    private static final long PENDING_WAKE_DELAY_MS = 1800L;
+    private static final long PENDING_REPAIR_DELAY_MS = 30_000L;
+    private static final long WAKE_THROTTLE_MS = 30_000L;
+    private static final long PAIR_REPAIR_THROTTLE_MS = 5L * 60L * 1000L;
 
     private final Map<String, BtChatManager.DeviceCandidate> discoveredDevices = new LinkedHashMap<>();
     private final Map<String, TextView> receiptViews = new LinkedHashMap<>();
@@ -149,6 +153,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final Set<String> renderedMessageIds = new HashSet<>();
     private final List<PendingOutgoing> pendingOutgoing = new ArrayList<>();
     private final List<PendingDelete> pendingDeletes = new ArrayList<>();
+    private final Map<String, Long> lastWakeAttemptAt = new HashMap<>();
+    private final Map<String, Long> lastPairRepairAt = new HashMap<>();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
     private ProfileStore profileStore;
@@ -2252,7 +2258,59 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         pendingOutgoing.add(outgoing);
         connectForAddress(address);
+        scheduleWakeForPendingOutgoing(outgoing);
         Toast.makeText(this, "Vou enviar assim que o Bluetooth conectar.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void scheduleWakeForPendingOutgoing(PendingOutgoing outgoing) {
+        if (outgoing == null || outgoing.address == null || outgoing.address.isEmpty() || outgoing.id == null || outgoing.id.isEmpty()) {
+            return;
+        }
+        uiHandler.postDelayed(() -> wakeForPendingOutgoing(outgoing.address, outgoing.id, false), PENDING_WAKE_DELAY_MS);
+        uiHandler.postDelayed(() -> wakeForPendingOutgoing(outgoing.address, outgoing.id, true), PENDING_REPAIR_DELAY_MS);
+    }
+
+    private void wakeForPendingOutgoing(String address, String id, boolean repairIfPaired) {
+        if (address == null || address.isEmpty() || id == null || id.isEmpty()) {
+            return;
+        }
+        MessageStore.ChatMessage message = messageStore.findMessage(address, id);
+        if (message == null || !message.mine || !MessageStore.STATUS_PENDING.equals(message.status)) {
+            return;
+        }
+        if (btChatManager.canSendTo(address)) {
+            flushPendingOutgoing(address);
+            return;
+        }
+        if (repairIfPaired && btChatManager.getPairedCandidate(address) != null) {
+            if (tryRepairPairing(address)) {
+                Toast.makeText(this, "Tentando refazer o pareamento para enviar a mensagem.", Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
+        if (tryWakeAddress(address)) {
+            Toast.makeText(this, "Tentando acordar o contato pelo Bluetooth.", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean tryWakeAddress(String address) {
+        long now = System.currentTimeMillis();
+        long last = lastWakeAttemptAt.containsKey(address) ? lastWakeAttemptAt.get(address) : 0L;
+        if (now - last < WAKE_THROTTLE_MS) {
+            return false;
+        }
+        lastWakeAttemptAt.put(address, now);
+        return btChatManager.wakeForMessage(address);
+    }
+
+    private boolean tryRepairPairing(String address) {
+        long now = System.currentTimeMillis();
+        long last = lastPairRepairAt.containsKey(address) ? lastPairRepairAt.get(address) : 0L;
+        if (now - last < PAIR_REPAIR_THROTTLE_MS) {
+            return false;
+        }
+        lastPairRepairAt.put(address, now);
+        return btChatManager.repairPairingForMessage(address);
     }
 
     private void flushPendingOutgoing(String address) {
@@ -2308,6 +2366,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         BtChatManager.DeviceCandidate target = btChatManager.getPairedCandidate(address);
         if (target != null && !btChatManager.isConnectedTo(address)) {
             btChatManager.connect(target);
+        } else if (target == null) {
+            tryWakeAddress(address);
         }
     }
 
@@ -2940,7 +3000,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 : new UserProfile(safeName(payload.name, "Contato nBTChat"), "", UserProfile.GENDER_OTHER, "");
         profileStore.saveContact(payload.address, profile);
         if (!payload.deviceId.isEmpty()) {
-            profileStore.saveIdentity(payload.address, payload.deviceId, payload.publicKey);
+            profileStore.saveIdentity(payload.address, payload.deviceId, payload.publicKey, payload.bluetoothName);
         }
         profileStore.setContactShareAllowed(payload.address, payload.allowContactSharing);
         Toast.makeText(this, "Contato salvo.", Toast.LENGTH_SHORT).show();
@@ -4008,7 +4068,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         ProfileStore.ContactIdentity identity = profileStore.loadIdentity(sourceAddress);
         BtChatManager.DeviceCandidate candidate = btChatManager.getPairedCandidate(sourceAddress);
         String name = profile.isComplete() ? profile.getDisplayName() : (candidate == null ? "Contato nBTChat" : candidate.name);
-        String bluetoothName = candidate == null ? name : candidate.name;
+        String bluetoothName = candidate == null
+                ? (identity.bluetoothName.isEmpty() ? name : identity.bluetoothName)
+                : candidate.name;
         if ((sourceAddress.trim().isEmpty() || !QrInvite.validBluetoothAddress(sourceAddress))
                 && (identity.deviceId == null || identity.deviceId.isEmpty())) {
             return null;

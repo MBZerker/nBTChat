@@ -116,6 +116,11 @@ public final class ProfileStore {
     }
 
     public void saveIdentity(String address, String deviceId, String identityPublicKey) {
+        ContactIdentity existing = loadIdentity(address);
+        saveIdentity(address, deviceId, identityPublicKey, existing.bluetoothName);
+    }
+
+    public void saveIdentity(String address, String deviceId, String identityPublicKey, String bluetoothName) {
         if (address == null || address.trim().isEmpty() || deviceId == null || deviceId.trim().isEmpty()) {
             return;
         }
@@ -123,6 +128,7 @@ public final class ProfileStore {
             JSONObject json = new JSONObject();
             json.put("deviceId", deviceId);
             json.put("identityPublicKey", identityPublicKey == null ? "" : identityPublicKey);
+            json.put("bluetoothName", bluetoothName == null ? "" : bluetoothName.trim());
             identityPrefs.edit().putString(address, json.toString()).apply();
         } catch (JSONException ignored) {
         }
@@ -185,7 +191,11 @@ public final class ProfileStore {
         }
         try {
             JSONObject json = new JSONObject(raw);
-            return new ContactIdentity(json.optString("deviceId", ""), json.optString("identityPublicKey", ""));
+            return new ContactIdentity(
+                    json.optString("deviceId", ""),
+                    json.optString("identityPublicKey", ""),
+                    json.optString("bluetoothName", "")
+            );
         } catch (JSONException ignored) {
             return new ContactIdentity("", "");
         }
@@ -214,10 +224,16 @@ public final class ProfileStore {
     public static final class ContactIdentity {
         public final String deviceId;
         public final String identityPublicKey;
+        public final String bluetoothName;
 
         ContactIdentity(String deviceId, String identityPublicKey) {
+            this(deviceId, identityPublicKey, "");
+        }
+
+        ContactIdentity(String deviceId, String identityPublicKey, String bluetoothName) {
             this.deviceId = deviceId;
             this.identityPublicKey = identityPublicKey;
+            this.bluetoothName = bluetoothName == null ? "" : bluetoothName;
         }
     }
 }
