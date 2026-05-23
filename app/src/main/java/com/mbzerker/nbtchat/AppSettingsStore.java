@@ -14,6 +14,7 @@ public final class AppSettingsStore {
     private static final String KEY_NOTIFICATION_SOUND_NAME = "notification_sound_name";
     private static final String KEY_VOICE_OUTPUT = "voice_output";
     private static final String KEY_USER_PRESENCE = "user_presence";
+    private static final String KEY_CONTACT_SHARING_ENABLED = "contact_sharing_enabled";
     public static final String VOICE_OUTPUT_PHONE = "phone";
     public static final String VOICE_OUTPUT_BLUETOOTH = "bluetooth";
     public static final String PRESENCE_ONLINE = "online";
@@ -80,6 +81,14 @@ public final class AppSettingsStore {
                 ? presence
                 : PRESENCE_ONLINE;
         prefs.edit().putString(KEY_USER_PRESENCE, value).apply();
+    }
+
+    public boolean contactSharingEnabled() {
+        return prefs.getBoolean(KEY_CONTACT_SHARING_ENABLED, false);
+    }
+
+    public void setContactSharingEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_CONTACT_SHARING_ENABLED, enabled).apply();
     }
 
     public boolean shouldPromptNearbyScan(int contactCount) {

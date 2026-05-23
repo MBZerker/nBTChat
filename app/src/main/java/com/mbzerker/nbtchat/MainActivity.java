@@ -17,10 +17,8 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
-import android.graphics.ImageDecoder;
 import android.graphics.Matrix;
 import android.graphics.Typeface;
-import android.graphics.drawable.AnimatedImageDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -95,7 +93,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.ByteBuffer;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -125,6 +122,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_PICK_NOTIFICATION_SOUND = 108;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND_FILE = 109;
     private static final int MAX_GIF_BYTES = 640 * 1024;
+    private static final int PROFILE_IMAGE_MAX_SIDE = 256;
+    private static final int CHAT_IMAGE_MAX_SIDE = 960;
     private static final int NAME_LIMIT = 12;
     private static final int LONG_MESSAGE_LIMIT = 360;
 
@@ -307,21 +306,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else if (requestCode == REQUEST_PICK_PHOTO && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
             if (uri != null) {
-                updateEditingPhoto(compressImage(uri));
+                updateEditingPhoto(compressProfileImage(uri));
             }
         } else if (requestCode == REQUEST_CAPTURE_PHOTO && resultCode == RESULT_OK && data != null) {
             if (pendingCameraUri != null) {
-                updateEditingPhoto(compressImage(pendingCameraUri));
+                updateEditingPhoto(compressProfileImage(pendingCameraUri));
                 pendingCameraUri = null;
             } else {
                 Object photo = data.getExtras() == null ? null : data.getExtras().get("data");
                 if (photo instanceof Bitmap) {
-                    updateEditingPhoto(compressBitmap((Bitmap) photo));
+                    updateEditingPhoto(compressBitmap((Bitmap) photo, PROFILE_IMAGE_MAX_SIDE, 84));
                 }
             }
         } else if (requestCode == REQUEST_CAPTURE_PHOTO && resultCode == RESULT_OK) {
             if (pendingCameraUri != null) {
-                updateEditingPhoto(compressImage(pendingCameraUri));
+                updateEditingPhoto(compressProfileImage(pendingCameraUri));
                 pendingCameraUri = null;
             }
         } else if (requestCode == REQUEST_CAPTURE_PHOTO) {
@@ -339,7 +338,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         } else if (requestCode == REQUEST_CAPTURE_CHAT_IMAGE && resultCode == RESULT_OK) {
             if (pendingCameraUri != null) {
-                sendImageMessage(compressImage(pendingCameraUri));
+                sendImageMessage(compressChatImage(pendingCameraUri));
                 pendingCameraUri = null;
             }
         } else if (requestCode == REQUEST_CAPTURE_CHAT_IMAGE) {
@@ -1710,7 +1709,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
                 dialog.getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
             }
-            startAnimatedDrawable(drawable);
         });
         dialog.show();
     }
@@ -2022,7 +2020,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             String configured = gadgetStore.table100CopyText().isEmpty()
                     ? "Sem texto configurado."
                     : "Mensagem: " + (gadgetStore.table100OwnerMessage().isEmpty() ? "sem mensagem" : gadgetStore.table100OwnerMessage())
-                    + "\nCopiar: " + gadgetStore.table100CopyText();
+                    + "\nCopiar: " + gadgetStore.table100CopyText()
+                    + "\nContato: " + (gadgetStore.table100OwnerContact().isEmpty() ? "sem dados" : gadgetStore.table100OwnerContact());
             TextView current = text(configured, 14, primary(), Typeface.NORMAL);
             current.setPadding(dp(12), dp(10), dp(12), dp(10));
             current.setBackground(rounded(surfaceAlt(), dp(12), border()));
@@ -2135,10 +2134,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         copyInput.setText(gadgetStore.table100CopyText());
         root.addView(copyInput, topMargin(dp(6)));
 
+        root.addView(label("Dados pessoais para contato"));
+        EditText contactInput = input("Pix, telefone, e-mail ou outra forma de contato");
+        contactInput.setSingleLine(false);
+        contactInput.setMinLines(2);
+        contactInput.setMaxLines(5);
+        contactInput.setText(gadgetStore.table100OwnerContact());
+        root.addView(contactInput, topMargin(dp(6)));
+
         Button save = pillButton("Salvar", "#16A34A", "#FFFFFF");
         save.setOnClickListener(v -> {
-            gadgetStore.saveTable100Texts(messageInput.getText().toString(), copyInput.getText().toString());
-            hideKeyboard(copyInput);
+            gadgetStore.saveTable100Texts(messageInput.getText().toString(), copyInput.getText().toString(), contactInput.getText().toString());
+            hideKeyboard(contactInput);
             Toast.makeText(this, "Tabela 100 salva.", Toast.LENGTH_SHORT).show();
             showStoreScreen();
         });
@@ -2193,6 +2200,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         if (owner) {
             root.addView(table100OwnerChoices(payload), topMargin(dp(18)));
+        } else if (table100HasLocalChoice(payload) && !payload.ownerContact.trim().isEmpty()) {
+            Button contact = pillButton("Informacoes de contato do dono", surfaceAlt(), primary());
+            contact.setOnClickListener(v -> showTable100OwnerContactDialog(payload));
+            root.addView(contact, topMargin(dp(14)));
         }
 
         setContentView(scrollView);
@@ -2760,7 +2771,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             bubble.setOnClickListener(openTable);
             title.setOnClickListener(openTable);
             hint.setOnClickListener(openTable);
+        } else if (MessageStore.KIND_CONTACT_INVITE.equals(kind)) {
+            addContactCardToBubble(bubble, body, mine);
         } else if ((MessageStore.KIND_IMAGE.equals(kind) || MessageStore.KIND_GIF.equals(kind)) && mediaBase64 != null && !mediaBase64.isEmpty()) {
+            if (MessageStore.KIND_GIF.equals(kind)) {
+                addGifBadge(bubble, mine);
+            }
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
             applyMediaToImageView(image, kind, mediaBase64);
@@ -2841,6 +2857,74 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "\u25F7";
     }
 
+    private void addContactCardToBubble(LinearLayout bubble, String body, boolean mine) {
+        ContactCardPayload payload = ContactCardPayload.parse(body);
+        TextView title = text(payload == null ? "Contato nBTChat" : safeName(payload.name, "Contato nBTChat"),
+                16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
+        title.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_invite_24, 0, 0, 0);
+        title.setCompoundDrawablePadding(dp(8));
+        bubble.addView(title);
+
+        String detail = payload == null
+                ? "Contato indisponivel"
+                : (payload.bluetoothName.isEmpty() ? "Dados Bluetooth compartilhados" : payload.bluetoothName);
+        TextView subtitle = text(detail, 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL);
+        subtitle.setSingleLine(true);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
+        bubble.addView(subtitle, topMargin(dp(2)));
+
+        if (payload == null || mine) {
+            return;
+        }
+        LinearLayout actions = horizontal();
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        Button save = pillButton("Salvar", mine ? "#FFFFFF" : "#16A34A", mine ? "#0F766E" : "#FFFFFF");
+        save.setTextSize(12);
+        save.setOnClickListener(v -> saveSharedContact(payload));
+        actions.addView(save, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        Button connect = pillButton("Conectar", mine ? "#D7FBE8" : surfaceAlt(), mine ? "#0F766E" : primary());
+        connect.setTextSize(12);
+        connect.setOnClickListener(v -> connectSharedContact(payload));
+        LinearLayout.LayoutParams connectParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        connectParams.setMargins(dp(8), 0, 0, 0);
+        actions.addView(connect, connectParams);
+        bubble.addView(actions, topMargin(dp(8)));
+    }
+
+    private void saveSharedContact(ContactCardPayload payload) {
+        if (payload == null || payload.address.trim().isEmpty()) {
+            Toast.makeText(this, "Este contato nao tem endereco Bluetooth salvo.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        UserProfile profile = payload.profile.isComplete()
+                ? payload.profile
+                : new UserProfile(safeName(payload.name, "Contato nBTChat"), "", UserProfile.GENDER_OTHER, "");
+        profileStore.saveContact(payload.address, profile);
+        if (!payload.deviceId.isEmpty()) {
+            profileStore.saveIdentity(payload.address, payload.deviceId, payload.publicKey);
+        }
+        Toast.makeText(this, "Contato salvo.", Toast.LENGTH_SHORT).show();
+        if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
+    }
+
+    private void connectSharedContact(ContactCardPayload payload) {
+        if (payload == null) {
+            return;
+        }
+        saveSharedContact(payload);
+        BtChatManager.DeviceCandidate candidate = btChatManager.getDirectCandidate(payload.address, payload.bluetoothName);
+        if (candidate == null) {
+            Toast.makeText(this, "Quando este aparelho estiver por perto, procure ou pareie pelo Bluetooth.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        pendingOpenChatAddress = candidate.address;
+        openNextQrConnectionUntil = System.currentTimeMillis() + 45_000L;
+        btChatManager.connectDirect(candidate);
+    }
+
     private GridLayout table100Grid(GadgetStore.Table100Payload payload, boolean mine, boolean fullScreen, boolean owner) {
         GridLayout grid = new GridLayout(this);
         grid.setColumnCount(fullScreen ? 10 : 5);
@@ -2850,9 +2934,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         for (int i = 1; i <= 100; i++) {
             final int number = i;
             Button cell = new Button(this);
-            cell.setText(String.valueOf(i));
             cell.setTextSize(fullScreen ? 12 : 11);
-            cell.setTextColor(color(fullScreen ? "#FFFFFF" : (mine ? "#FFFFFF" : primary())));
             cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             cell.setAllCaps(false);
             cell.setMinWidth(0);
@@ -2860,6 +2942,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             cell.setMinHeight(0);
             cell.setMinimumHeight(0);
             cell.setPadding(0, 0, 0, 0);
+            int status = table100NumberStatus(payload, number, owner);
+            setCellTextForStatus(cell, status, number, fullScreen, mine);
             String fill = table100CellColor(payload, number, owner, fullScreen, mine);
             String stroke = fullScreen ? "#BBF7D0" : (mine ? "#7DD3FC" : border());
             cell.setBackground(rounded(fill, dp(fullScreen ? 12 : 8), stroke));
@@ -2924,8 +3008,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showTable100ResultDialog(number, payload);
             return;
         }
-        if (table100NumberStatus(payload, number, false) == 2) {
-            showTable100ResultDialog(number, payload);
+        int status = table100NumberStatus(payload, number, false);
+        if (status != 0) {
+            if (status == 2) {
+                showTable100ResultDialog(number, payload);
+            } else {
+                Toast.makeText(this, "Este numero ja foi escolhido e esta aguardando confirmacao.", Toast.LENGTH_LONG).show();
+            }
             return;
         }
         new AlertDialog.Builder(this)
@@ -2981,6 +3070,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         container.setPadding(dp(14), dp(14), dp(14), dp(14));
         container.setBackground(rounded(surface(), dp(14), border()));
         container.addView(text("Escolhas dos contatos", 18, primary(), Typeface.BOLD));
+        Button addManual = pillButton("Adicionar pessoa e travar numero", "#16A34A", "#FFFFFF");
+        addManual.setOnClickListener(v -> showManualTableChoiceDialog(payload));
+        container.addView(addManual, topMargin(dp(12)));
 
         List<GadgetStore.Table100Choice> choices = gadgetStore.loadChoices(payload.tableId);
         if (choices.isEmpty()) {
@@ -3011,6 +3103,77 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         }
         return container;
+    }
+
+    private boolean table100HasLocalChoice(GadgetStore.Table100Payload payload) {
+        if (payload == null || payload.tableId.isEmpty() || currentRemoteAddress == null || currentRemoteAddress.isEmpty()) {
+            return false;
+        }
+        for (GadgetStore.Table100Choice choice : gadgetStore.loadChoices(payload.tableId)) {
+            if (currentRemoteAddress.equals(choice.address)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void showTable100OwnerContactDialog(GadgetStore.Table100Payload payload) {
+        String contact = payload == null ? "" : payload.ownerContact.trim();
+        if (contact.isEmpty()) {
+            Toast.makeText(this, "O dono da tabela nao deixou dados de contato.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        TextView box = text(contact, 15, primary(), Typeface.NORMAL);
+        box.setTextIsSelectable(true);
+        box.setPadding(dp(14), dp(12), dp(14), dp(12));
+        box.setBackground(rounded(surfaceAlt(), dp(12), border()));
+        new AlertDialog.Builder(this)
+                .setTitle("Contato do dono")
+                .setView(box)
+                .setPositiveButton("Copiar", (dialog, which) -> copyMessageText(contact))
+                .setNegativeButton("Fechar", null)
+                .show();
+    }
+
+    private void showManualTableChoiceDialog(GadgetStore.Table100Payload payload) {
+        LinearLayout content = vertical();
+        content.setPadding(dp(18), dp(8), dp(18), dp(4));
+
+        EditText nameInput = input("Nome da pessoa");
+        content.addView(label("Pessoa"));
+        content.addView(nameInput, topMargin(dp(6)));
+
+        EditText numberInput = input("Numero de 1 a 100");
+        numberInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        content.addView(label("Numero"));
+        content.addView(numberInput, topMargin(dp(6)));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Travar numero")
+                .setView(content)
+                .setPositiveButton("Adicionar", (dialog, which) -> {
+                    String name = nameInput.getText().toString().trim();
+                    int number;
+                    try {
+                        number = Integer.parseInt(numberInput.getText().toString().trim());
+                    } catch (Exception ex) {
+                        Toast.makeText(this, "Informe um numero entre 1 e 100.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (number < 1 || number > 100) {
+                        Toast.makeText(this, "Informe um numero entre 1 e 100.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (table100NumberStatus(payload, number, true) != 0) {
+                        Toast.makeText(this, "Este numero ja esta travado.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    String address = "manual:" + payload.tableId + ":" + number + ":" + Long.toHexString(System.currentTimeMillis());
+                    gadgetStore.saveChoice(payload.tableId, address, number, name.isEmpty() ? "Pessoa externa" : name, false);
+                    refreshTable100PlayScreen();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
     }
 
     private View table100ChoiceRow(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice) {
@@ -3063,6 +3226,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void sendTable100Confirmation(GadgetStore.Table100Payload payload, String address, int number, boolean confirmed) {
+        if (address == null || address.startsWith("manual:")) {
+            return;
+        }
         try {
             JSONObject json = new JSONObject();
             json.put("tableId", payload.tableId);
@@ -3618,6 +3784,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         outputActions.addView(bluetooth, bluetoothParams);
         card.addView(outputActions, topMargin(dp(10)));
 
+        LinearLayout privacyRow = horizontal();
+        privacyRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout privacyText = vertical();
+        privacyText.addView(text("Compartilhar contatos Bluetooth", 16, primary(), Typeface.BOLD));
+        TextView privacyHint = text("Permite enviar dados Bluetooth de contatos salvos para outro contato.", 13, secondary(), Typeface.NORMAL);
+        privacyHint.setLineSpacing(dp(2), 1f);
+        privacyText.addView(privacyHint, topMargin(dp(3)));
+        privacyRow.addView(privacyText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Switch privacyToggle = new Switch(this);
+        privacyToggle.setChecked(settingsStore.contactSharingEnabled());
+        privacyToggle.setOnCheckedChangeListener((buttonView, isChecked) -> settingsStore.setContactSharingEnabled(isChecked));
+        privacyRow.addView(privacyToggle);
+        card.addView(privacyRow, topMargin(dp(20)));
+
         root.addView(card, topMargin(dp(18)));
 
         setContentView(scrollView);
@@ -3703,7 +3883,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         menu.getMenu().add(0, 1, 0, "Apagar conversa");
         menu.getMenu().add(0, 2, 1, muted ? "Ativar notificacoes" : "Silenciar contato");
         menu.getMenu().add(0, 3, 2, blocked ? "Desbloquear contato" : "Bloquear contato");
-        menu.getMenu().add(0, 4, 3, "Remover contato e pareamento");
+        menu.getMenu().add(0, 5, 3, settingsStore.contactSharingEnabled() ? "Compartilhar contato Bluetooth" : "Compartilhar contato desativado");
+        menu.getMenu().add(0, 4, 4, "Remover contato e pareamento");
         menu.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) {
                 confirmDeleteConversation(address);
@@ -3728,6 +3909,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 confirmRemoveContact(address);
                 return true;
             }
+            if (item.getItemId() == 5) {
+                if (!settingsStore.contactSharingEnabled()) {
+                    Toast.makeText(this, "Ative em Configuracoes > Privacidade para compartilhar contatos Bluetooth.", Toast.LENGTH_LONG).show();
+                    return true;
+                }
+                showContactShareChooser(address);
+                return true;
+            }
             return false;
         });
         menu.show();
@@ -3742,6 +3931,66 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setPositiveButton("Remover", (dialog, which) -> removeContactCompletely(address))
                 .setNegativeButton("Cancelar", null)
                 .show();
+    }
+
+    private void showContactShareChooser(String sourceAddress) {
+        ContactCardPayload payload = contactCardPayload(sourceAddress);
+        if (payload == null) {
+            Toast.makeText(this, "Nao tenho dados suficientes desse contato para compartilhar.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Map<String, UserProfile> contacts = profileStore.loadContacts();
+        List<String> addresses = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
+            String address = entry.getKey();
+            if (address.equals(sourceAddress)) {
+                continue;
+            }
+            addresses.add(address);
+            UserProfile profile = entry.getValue();
+            names.add(safeName(profile.isComplete() ? profile.getDisplayName() : "Contato nBTChat", "Contato"));
+        }
+        if (addresses.isEmpty()) {
+            Toast.makeText(this, "Nenhum outro contato para receber este contato.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Compartilhar " + safeName(payload.name, "Contato"))
+                .setItems(names.toArray(new String[0]), (dialog, which) -> sendContactCardToAddress(addresses.get(which), payload))
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private ContactCardPayload contactCardPayload(String sourceAddress) {
+        if (sourceAddress == null || sourceAddress.trim().isEmpty()) {
+            return null;
+        }
+        UserProfile profile = profileStore.loadContact(sourceAddress);
+        ProfileStore.ContactIdentity identity = profileStore.loadIdentity(sourceAddress);
+        BtChatManager.DeviceCandidate candidate = btChatManager.getPairedCandidate(sourceAddress);
+        String name = profile.isComplete() ? profile.getDisplayName() : (candidate == null ? "Contato nBTChat" : candidate.name);
+        String bluetoothName = candidate == null ? name : candidate.name;
+        if ((sourceAddress.trim().isEmpty() || !QrInvite.validBluetoothAddress(sourceAddress))
+                && (identity.deviceId == null || identity.deviceId.isEmpty())) {
+            return null;
+        }
+        return new ContactCardPayload(sourceAddress, bluetoothName, identity.deviceId, identity.identityPublicKey, profile, name);
+    }
+
+    private void sendContactCardToAddress(String address, ContactCardPayload payload) {
+        if (address == null || address.trim().isEmpty() || payload == null) {
+            return;
+        }
+        long sentAt = System.currentTimeMillis();
+        String id = messageStore.createId();
+        String body = payload.toJson();
+        messageStore.addMessage(address, id, MessageStore.KIND_CONTACT_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
+        sendOrQueueOutgoing(address, id, MessageStore.KIND_CONTACT_INVITE, body, "", 0L, sentAt);
+        Toast.makeText(this, "Contato compartilhado no nBTChat.", Toast.LENGTH_SHORT).show();
+        if ("home".equals(currentScreen)) {
+            renderContactList();
+        }
     }
 
     private void removeContactCompletely(String address) {
@@ -3886,6 +4135,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (MessageStore.KIND_TABLE_100.equals(message.kind)) {
             return message.mine ? "Voce enviou uma tabela 100" : "Tabela 100";
+        }
+        if (MessageStore.KIND_CONTACT_INVITE.equals(message.kind)) {
+            return message.mine ? "Voce enviou um contato" : "Contato nBTChat";
         }
         String body = message.body == null ? "" : message.body.trim();
         if (body.length() > 80) {
@@ -4074,13 +4326,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
-    private String compressImage(Uri uri) {
+    private String compressProfileImage(Uri uri) {
+        return compressImage(uri, PROFILE_IMAGE_MAX_SIDE, 84);
+    }
+
+    private String compressChatImage(Uri uri) {
+        return compressImage(uri, CHAT_IMAGE_MAX_SIDE, 90);
+    }
+
+    private String compressImage(Uri uri, int maxSide, int quality) {
         try {
             Bitmap original = decodeBitmapWithOrientation(uri);
             if (original == null) {
                 return "";
             }
-            return compressBitmap(original);
+            return compressBitmap(original, maxSide, quality);
         } catch (Exception ex) {
             Toast.makeText(this, "Nao foi possivel carregar a foto.", Toast.LENGTH_LONG).show();
             return "";
@@ -4099,7 +4359,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             return new MediaPayload(MessageStore.KIND_GIF, "GIF", gifBase64);
         }
-        String imageBase64 = compressImage(uri);
+        String imageBase64 = compressChatImage(uri);
         if (imageBase64.isEmpty()) {
             return null;
         }
@@ -4196,9 +4456,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
     }
 
-    private String compressBitmap(Bitmap original) {
+    private String compressBitmap(Bitmap original, int maxSide, int quality) {
         int max = Math.max(original.getWidth(), original.getHeight());
-        float scale = max > 256 ? 256f / max : 1f;
+        int target = Math.max(128, maxSide);
+        float scale = max > target ? (float) target / max : 1f;
         Bitmap scaled = Bitmap.createScaledBitmap(
                 original,
                 Math.max(1, Math.round(original.getWidth() * scale)),
@@ -4206,7 +4467,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 true
         );
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        scaled.compress(Bitmap.CompressFormat.JPEG, 84, outputStream);
+        scaled.compress(Bitmap.CompressFormat.JPEG, Math.max(60, Math.min(95, quality)), outputStream);
         return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP);
     }
 
@@ -4226,7 +4487,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Drawable drawable = mediaDrawable(kind, base64);
         if (drawable != null) {
             imageView.setImageDrawable(drawable);
-            startAnimatedDrawable(drawable);
         }
     }
 
@@ -4236,21 +4496,45 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         try {
             byte[] bytes = Base64.decode(base64, Base64.NO_WRAP);
-            if (MessageStore.KIND_GIF.equals(kind) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                Drawable drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(ByteBuffer.wrap(bytes)));
-                return drawable;
-            }
-            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            Bitmap bitmap = decodeMediaBitmap(bytes, MessageStore.KIND_GIF.equals(kind) ? 420 : 1200);
             return bitmap == null ? null : new BitmapDrawable(getResources(), bitmap);
         } catch (Exception ignored) {
             return null;
         }
     }
 
-    private void startAnimatedDrawable(Drawable drawable) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && drawable instanceof AnimatedImageDrawable) {
-            ((AnimatedImageDrawable) drawable).start();
+    private Bitmap decodeMediaBitmap(byte[] bytes, int targetMax) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, targetMax);
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+    }
+
+    private void addGifBadge(LinearLayout bubble, boolean mine) {
+        TextView badge = text("GIF", 11, mine ? "#FFFFFF" : "#0F766E", Typeface.BOLD);
+        badge.setGravity(Gravity.CENTER);
+        badge.setPadding(dp(8), dp(3), dp(8), dp(3));
+        badge.setBackground(rounded(mine ? "#0C5F58" : "#DFF4EC", dp(10), mine ? "#7DD3FC" : "#16A34A"));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.setMargins(0, 0, 0, dp(6));
+        bubble.addView(badge, params);
+    }
+
+    private void addChoiceXOverlay(Button cell) {
+        cell.setText("X");
+        cell.setTextColor(color("#DC2626"));
+        cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+    }
+
+    private void setCellTextForStatus(Button cell, int status, int number, boolean fullScreen, boolean mine) {
+        if (status == 1) {
+            addChoiceXOverlay(cell);
+            return;
         }
+        cell.setText(String.valueOf(number));
+        cell.setTextColor(color(fullScreen ? "#FFFFFF" : (mine ? "#FFFFFF" : primary())));
     }
 
     private FrameLayout avatarStatusFrame(UserProfile profile, String presence, int size, int radius, int borderWidth, boolean badge, View.OnClickListener clickListener) {
@@ -4375,6 +4659,67 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             this.kind = kind == null ? MessageStore.KIND_IMAGE : kind;
             this.body = body == null ? "" : body;
             this.mediaBase64 = mediaBase64 == null ? "" : mediaBase64;
+        }
+    }
+
+    private static final class ContactCardPayload {
+        final String address;
+        final String bluetoothName;
+        final String deviceId;
+        final String publicKey;
+        final UserProfile profile;
+        final String name;
+
+        ContactCardPayload(String address, String bluetoothName, String deviceId, String publicKey, UserProfile profile, String name) {
+            this.address = address == null ? "" : address.trim();
+            this.bluetoothName = bluetoothName == null ? "" : bluetoothName.trim();
+            this.deviceId = deviceId == null ? "" : deviceId.trim();
+            this.publicKey = publicKey == null ? "" : publicKey.trim();
+            this.profile = profile == null ? UserProfile.empty() : profile;
+            this.name = name == null ? "" : name.trim();
+        }
+
+        String toJson() {
+            try {
+                JSONObject json = new JSONObject();
+                json.put("type", "nbtchat-contact");
+                json.put("address", address);
+                json.put("bluetoothName", bluetoothName);
+                json.put("deviceId", deviceId);
+                json.put("publicKey", publicKey);
+                json.put("name", name);
+                json.put("profile", profile.toJson());
+                return json.toString();
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        static ContactCardPayload parse(String raw) {
+            if (raw == null || raw.trim().isEmpty()) {
+                return null;
+            }
+            try {
+                JSONObject json = new JSONObject(raw);
+                if (!"nbtchat-contact".equals(json.optString("type", ""))) {
+                    return null;
+                }
+                UserProfile profile = UserProfile.fromJson(json.optJSONObject("profile"));
+                String name = json.optString("name", "");
+                if (name.trim().isEmpty() && profile.isComplete()) {
+                    name = profile.getDisplayName();
+                }
+                return new ContactCardPayload(
+                        json.optString("address", ""),
+                        json.optString("bluetoothName", ""),
+                        json.optString("deviceId", ""),
+                        json.optString("publicKey", ""),
+                        profile,
+                        name
+                );
+            } catch (Exception ignored) {
+                return null;
+            }
         }
     }
 

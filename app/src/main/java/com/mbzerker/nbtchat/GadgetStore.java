@@ -19,6 +19,7 @@ public final class GadgetStore {
     private static final String KEY_TABLE_100_TEXT = "table100_text";
     private static final String KEY_TABLE_100_MESSAGE = "table100_message";
     private static final String KEY_TABLE_100_COPY = "table100_copy";
+    private static final String KEY_TABLE_100_OWNER_CONTACT = "table100_owner_contact";
     private static final String KEY_TABLE_100_INSTANCE = "table100_instance";
     private static final String KEY_TABLE_100_CHOICES = "table100_choices";
     private static final long WEEK_MS = 7L * 24L * 60L * 60L * 1000L;
@@ -60,6 +61,10 @@ public final class GadgetStore {
         return copy == null ? "" : copy;
     }
 
+    public String table100OwnerContact() {
+        return prefs.getString(KEY_TABLE_100_OWNER_CONTACT, "");
+    }
+
     public String table100InstanceId() {
         String id = prefs.getString(KEY_TABLE_100_INSTANCE, "");
         if (id == null || id.trim().isEmpty()) {
@@ -70,19 +75,24 @@ public final class GadgetStore {
     }
 
     public void saveTable100Text(String text) {
-        saveTable100Texts(table100OwnerMessage(), text);
+        saveTable100Texts(table100OwnerMessage(), text, table100OwnerContact());
     }
 
     public void saveTable100Texts(String ownerMessage, String copyText) {
+        saveTable100Texts(ownerMessage, copyText, table100OwnerContact());
+    }
+
+    public void saveTable100Texts(String ownerMessage, String copyText, String ownerContact) {
         prefs.edit()
                 .putString(KEY_TABLE_100_MESSAGE, ownerMessage == null ? "" : ownerMessage.trim())
                 .putString(KEY_TABLE_100_COPY, copyText == null ? "" : copyText.trim())
+                .putString(KEY_TABLE_100_OWNER_CONTACT, ownerContact == null ? "" : ownerContact.trim())
                 .putString(KEY_TABLE_100_TEXT, copyText == null ? "" : copyText.trim())
                 .apply();
     }
 
     public Table100Payload table100Payload() {
-        return new Table100Payload(table100InstanceId(), table100OwnerMessage(), table100CopyText());
+        return new Table100Payload(table100InstanceId(), table100OwnerMessage(), table100CopyText(), table100OwnerContact());
     }
 
     public void saveChoice(String tableId, String address, int number, String name, boolean confirmed) {
@@ -185,11 +195,13 @@ public final class GadgetStore {
         public final String tableId;
         public final String ownerMessage;
         public final String copyText;
+        public final String ownerContact;
 
-        Table100Payload(String tableId, String ownerMessage, String copyText) {
+        Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact) {
             this.tableId = tableId == null ? "" : tableId;
             this.ownerMessage = ownerMessage == null ? "" : ownerMessage;
             this.copyText = copyText == null ? "" : copyText;
+            this.ownerContact = ownerContact == null ? "" : ownerContact;
         }
 
         public String toMessageBody() {
@@ -199,6 +211,7 @@ public final class GadgetStore {
                 json.put("tableId", tableId);
                 json.put("ownerMessage", ownerMessage);
                 json.put("copyText", copyText);
+                json.put("ownerContact", ownerContact);
                 return json.toString();
             } catch (JSONException ignored) {
                 return copyText;
@@ -207,7 +220,7 @@ public final class GadgetStore {
 
         public static Table100Payload parse(String raw) {
             if (raw == null || raw.trim().isEmpty()) {
-                return new Table100Payload("", "", "");
+                return new Table100Payload("", "", "", "");
             }
             try {
                 JSONObject json = new JSONObject(raw);
@@ -215,12 +228,13 @@ public final class GadgetStore {
                     return new Table100Payload(
                             json.optString("tableId", ""),
                             json.optString("ownerMessage", ""),
-                            json.optString("copyText", "")
+                            json.optString("copyText", ""),
+                            json.optString("ownerContact", "")
                     );
                 }
             } catch (JSONException ignored) {
             }
-            return new Table100Payload("", "", raw.trim());
+            return new Table100Payload("", "", raw.trim(), "");
         }
     }
 
