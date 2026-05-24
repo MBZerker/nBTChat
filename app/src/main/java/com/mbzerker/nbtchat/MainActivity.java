@@ -273,7 +273,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         applySystemBars();
         checkForUpdates(false);
 
-        if (profileStore.hasLocalProfile()) {
+        if (!settingsStore.termsAccepted()) {
+            showTermsScreen();
+            return;
+        } else if (profileStore.hasLocalProfile()) {
             showInitialScreen();
         } else {
             showProfileScreen();
@@ -283,6 +286,64 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         openChatFromIntent(getIntent());
         handleSharedImageIntent(getIntent());
+    }
+
+    private void showTermsScreen() {
+        currentScreen = "terms";
+        messageList = null;
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(20), dp(16), dp(20), dp(18));
+        scrollView.addView(root, matchWrap());
+
+        TextView title = text("Termos de uso", 27, primary(), Typeface.BOLD);
+        root.addView(title);
+        TextView intro = text("Leia antes de usar o nBTChat.", 14, secondary(), Typeface.NORMAL);
+        root.addView(intro, topMargin(dp(6)));
+
+        TextView body = text(termsOfUseText(), 14, primary(), Typeface.NORMAL);
+        body.setLineSpacing(dp(3), 1f);
+        body.setPadding(dp(14), dp(14), dp(14), dp(14));
+        body.setBackground(rounded(surface(), dp(14), border()));
+        root.addView(body, topMargin(dp(16)));
+
+        Button accept = pillButton("Aceitar e continuar", "#16A34A", "#FFFFFF");
+        accept.setOnClickListener(v -> {
+            settingsStore.setTermsAccepted(true);
+            if (profileStore.hasLocalProfile()) {
+                showInitialScreen();
+            } else {
+                showProfileScreen();
+            }
+            if (!requestMissingPermissions()) {
+                tryStartBluetooth();
+            }
+        });
+        root.addView(accept, topMargin(dp(16)));
+
+        Button decline = pillButton("Recusar e desinstalar", surfaceAlt(), primary());
+        decline.setOnClickListener(v -> {
+            Toast.makeText(this, "Abrindo a tela de desinstalacao do Android.", Toast.LENGTH_LONG).show();
+            Intent uninstall = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + getPackageName()));
+            startActivity(uninstall);
+            finish();
+        });
+        root.addView(decline, topMargin(dp(8)));
+
+        setContentView(scrollView);
+        requestInsets(root);
+    }
+
+    private String termsOfUseText() {
+        return "O nBTChat e um aplicativo livre de comunicacao local por Bluetooth. Ele foi criado para conversas privadas entre pessoas proximas e para gadgets oficiais dentro do proprio app.\n\n"
+                + "O app respeita as leis brasileiras. Voce se compromete a nao usar o nBTChat para fraude, abuso, assedio, jogos de azar, sorteios, distribuicao de premios, promocoes comerciais ou qualquer atividade que exija autorizacao legal sem cumprir essa exigencia.\n\n"
+                + "As conversas nao sao salvas em servidor do nBTChat. Elas ficam no aparelho e sao protegidas por criptografia de ponta a ponta no envio e por armazenamento local criptografado quando o app precisa guardar historico, midias, perfil, contatos, backups e configuracoes.\n\n"
+                + "A loja pode armazenar dados minimos para liberar compras e recuperacao, como identificador do aparelho, produto, validade, nome, CPF com protecao por hash, ultimos digitos do CPF, codigo de recuperacao e estado da Cartela de eventos. Pagamentos sao processados pelo Mercado Pago.\n\n"
+                + "A Cartela de eventos e uma ferramenta de organizacao. O organizador e responsavel pela finalidade do uso, pelos textos configurados, pelos contatos exibidos e pela conformidade com as regras aplicaveis ao evento.\n\n"
+                + "Ao continuar, voce entende que o Bluetooth depende do aparelho, permissao do sistema e distancia fisica, e que backups, restauracoes e sincronizacao pela internet podem depender de servicos externos.";
     }
 
     @Override
@@ -2053,7 +2114,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         }
         String ownerDeviceId = payload.ownerDeviceId.isEmpty() ? StoreDeviceId.get(this) : payload.ownerDeviceId;
-        return new GadgetStore.Table100Payload(payload.tableId, payload.ownerMessage, payload.copyText, payload.ownerContact, ownerDeviceId, lockedNumbers);
+        return new GadgetStore.Table100Payload(payload.tableId, payload.ownerMessage, payload.copyText, payload.ownerContact,
+                ownerDeviceId, lockedNumbers, payload.allowReservations, payload.reservationHours);
     }
 
     private String table100BodyWithKnownLocks(String body) {
@@ -2148,8 +2210,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             actions.addView(check, checkParams);
             item.addView(actions, topMargin(dp(12)));
         } else {
-            TextView price = text("R$ 4,99 - acesso por 7 dias.", 13, secondary(), Typeface.BOLD);
-            item.addView(price, topMargin(dp(14)));
+            LinearLayout priceRow = horizontal();
+            priceRow.setGravity(Gravity.CENTER_VERTICAL);
+            TextView price = text("R$ 4,99", 18, "#16A34A", Typeface.BOLD);
+            priceRow.addView(price);
+            TextView days = text("15 dias", 14, "#38BDF8", Typeface.BOLD);
+            LinearLayout.LayoutParams daysParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            daysParams.setMargins(dp(8), 0, 0, 0);
+            priceRow.addView(days, daysParams);
+            item.addView(priceRow, topMargin(dp(14)));
             TextView footer = text(GadgetStore.TABLE_100_FOOTER, 12, secondary(), Typeface.NORMAL);
             footer.setLineSpacing(dp(2), 1f);
             item.addView(footer, topMargin(dp(8)));
@@ -2168,9 +2237,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String deviceId = StoreDeviceId.get(this);
         Uri checkoutUri = storePaymentClient.cartelaCheckoutUri(deviceId);
         gadgetStore.savePendingTable100Payment(checkoutUri.toString(), deviceId);
-        openExternalLink(checkoutUri);
-        Toast.makeText(this, "Salve o codigo de recuperacao, conclua o pagamento e volte ao nBTChat.", Toast.LENGTH_LONG).show();
-        showStoreScreen();
+        new AlertDialog.Builder(this)
+                .setTitle("Antes de continuar")
+                .setMessage("A Cartela de eventos e uma ferramenta de organizacao. O uso, a finalidade do evento e o cumprimento das regras aplicaveis sao responsabilidade do organizador.")
+                .setPositiveButton("Continuar", (dialog, which) -> {
+                    openExternalLink(checkoutUri);
+                    Toast.makeText(this, "Salve o codigo de recuperacao, conclua o pagamento e volte ao nBTChat.", Toast.LENGTH_LONG).show();
+                    showStoreScreen();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
     }
 
     private void recoverCartelaPurchase() {
@@ -2251,7 +2327,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         local.isComplete() ? local.getDisplayName() : "Dono",
                         payload.ownerMessage,
                         payload.copyText,
-                        payload.ownerContact
+                        payload.ownerContact,
+                        payload.allowReservations,
+                        payload.reservationHours
                 );
                 gadgetStore.mergeOnlineCartela(state);
                 runOnUiThread(() -> {
@@ -2404,9 +2482,36 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         contactInput.setText(gadgetStore.table100OwnerContact());
         root.addView(contactInput, topMargin(dp(6)));
 
+        LinearLayout reservationRow = horizontal();
+        reservationRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout reservationTexts = vertical();
+        reservationTexts.addView(text("Permitir reservas", 15, primary(), Typeface.BOLD));
+        TextView reservationHelp = text("Participantes podem reservar um numero por prazo definido.", 12, secondary(), Typeface.NORMAL);
+        reservationHelp.setLineSpacing(dp(1), 1f);
+        reservationTexts.addView(reservationHelp, topMargin(dp(2)));
+        reservationRow.addView(reservationTexts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Switch reservationSwitch = new Switch(this);
+        reservationSwitch.setChecked(gadgetStore.table100ReservationsEnabled());
+        reservationRow.addView(reservationSwitch);
+        root.addView(reservationRow, topMargin(dp(14)));
+
+        root.addView(label("Prazo da reserva em horas"));
+        EditText reservationHoursInput = input("Ex.: 24");
+        reservationHoursInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        reservationHoursInput.setSingleLine(true);
+        reservationHoursInput.setText(String.valueOf(gadgetStore.table100ReservationHours()));
+        root.addView(reservationHoursInput, topMargin(dp(6)));
+
         Button save = pillButton("Salvar", "#16A34A", "#FFFFFF");
         save.setOnClickListener(v -> {
+            int hours;
+            try {
+                hours = Integer.parseInt(reservationHoursInput.getText().toString().trim());
+            } catch (Exception ex) {
+                hours = 24;
+            }
             gadgetStore.saveTable100Texts(messageInput.getText().toString(), copyInput.getText().toString(), contactInput.getText().toString());
+            gadgetStore.saveTable100ReservationSettings(reservationSwitch.isChecked(), hours);
             registerCartelaOnline(false);
             hideKeyboard(contactInput);
             Toast.makeText(this, "Cartela de eventos salva.", Toast.LENGTH_SHORT).show();
@@ -2468,10 +2573,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         if (owner) {
             root.addView(table100OwnerChoices(payload), topMargin(dp(18)));
-        } else if (table100HasLocalChoice(payload) && !payload.ownerContact.trim().isEmpty()) {
-            Button contact = pillButton("Informacoes de contato do dono", surfaceAlt(), primary());
-            contact.setOnClickListener(v -> showTable100OwnerContactDialog(payload));
-            root.addView(contact, topMargin(dp(14)));
+        } else if (table100HasLocalChoice(payload)) {
+            if (!payload.ownerContact.trim().isEmpty()) {
+                Button contact = pillButton("Informacoes de contato do dono", surfaceAlt(), primary());
+                contact.setOnClickListener(v -> showTable100OwnerContactDialog(payload));
+                root.addView(contact, topMargin(dp(14)));
+            }
+            root.addView(table100MyChoices(payload), topMargin(dp(12)));
         }
 
         setContentView(scrollView);
@@ -3360,19 +3468,36 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         int status = table100NumberStatus(payload, number, false);
         if (status != 0) {
-            Toast.makeText(this, "Este numero ja foi escolhido.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    status == 1 ? "Este numero esta em analise pelo organizador." : "Este numero ja esta confirmado.",
+                    Toast.LENGTH_LONG).show();
             return;
         }
-        new AlertDialog.Builder(this)
+        String disclaimer = "Voce escolheu o numero " + number + ". Ao continuar, voce reconhece que a organizacao e a finalidade do evento sao responsabilidade do organizador.";
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
                 .setTitle("Confirmar escolha")
-                .setMessage("Voce escolheu o numero " + number + ", deseja confirmar sua escolha?")
-                .setPositiveButton("Sim", (dialog, which) -> {
-                    markTable100Choice(payload, number);
-                    refreshTable100PlayScreen();
-                    showTable100ResultDialog(number, payload);
-                })
-                .setNegativeButton("Nao", null)
-                .show();
+                .setMessage(disclaimer);
+        if (payload.allowReservations) {
+            builder.setPositiveButton("Confirmar agora", (dialog, which) -> {
+                markTable100Choice(payload, number, false);
+                refreshTable100PlayScreen();
+                showTable100ResultDialog(number, payload);
+            });
+            builder.setNeutralButton("Reservar", (dialog, which) -> {
+                markTable100Choice(payload, number, true);
+                refreshTable100PlayScreen();
+                Toast.makeText(this, "Reserva registrada e aguardando analise do organizador.", Toast.LENGTH_LONG).show();
+            });
+            builder.setNegativeButton("Cancelar", null);
+        } else {
+            builder.setPositiveButton("Sim", (dialog, which) -> {
+                markTable100Choice(payload, number, false);
+                refreshTable100PlayScreen();
+                showTable100ResultDialog(number, payload);
+            });
+            builder.setNegativeButton("Nao", null);
+        }
+        builder.show();
     }
 
     private void showTable100ResultDialog(int number, GadgetStore.Table100Payload payload) {
@@ -3403,16 +3528,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .show();
     }
 
-    private void markTable100Choice(GadgetStore.Table100Payload payload, int number) {
+    private void markTable100Choice(GadgetStore.Table100Payload payload, int number, boolean reserved) {
         if (payload == null || payload.tableId.isEmpty()) {
             return;
         }
         UserProfile local = profileStore.loadLocalProfile();
         String chooserName = local.isComplete() ? local.getDisplayName() : "Contato";
         String chooserDeviceId = StoreDeviceId.get(this);
-        gadgetStore.saveChoice(payload.tableId, chooserDeviceId, number, chooserName, false);
-        chooseTable100NumberOnline(payload, number, chooserDeviceId, chooserName);
-        sendTable100Choice(payload, number);
+        long expiresAt = reserved ? System.currentTimeMillis() + Math.max(1, payload.reservationHours) * 60L * 60L * 1000L : 0L;
+        gadgetStore.saveChoice(payload.tableId, chooserDeviceId, number, chooserName, false, reserved, expiresAt);
+        chooseTable100NumberOnline(payload, number, chooserDeviceId, chooserName, reserved);
+        sendTable100Choice(payload, number, reserved, expiresAt);
     }
 
     private View table100OwnerChoices(GadgetStore.Table100Payload payload) {
@@ -3468,6 +3594,39 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return false;
     }
 
+    private View table100MyChoices(GadgetStore.Table100Payload payload) {
+        LinearLayout container = vertical();
+        container.setPadding(dp(14), dp(12), dp(14), dp(12));
+        container.setBackground(rounded(surface(), dp(14), border()));
+        container.addView(text("Meus numeros", 17, primary(), Typeface.BOLD));
+        List<GadgetStore.Table100Choice> choices = gadgetStore.choicesForAddress(payload.tableId, StoreDeviceId.get(this));
+        if (choices.isEmpty()) {
+            container.addView(text("Nenhum numero escolhido neste aparelho.", 13, secondary(), Typeface.NORMAL), topMargin(dp(6)));
+            return container;
+        }
+        StringBuilder builder = new StringBuilder();
+        for (GadgetStore.Table100Choice choice : choices) {
+            if (builder.length() > 0) {
+                builder.append("\n");
+            }
+            builder.append(choice.number).append(" - ").append(table100ChoiceStateLabel(choice));
+        }
+        TextView list = text(builder.toString(), 14, primary(), Typeface.BOLD);
+        list.setLineSpacing(dp(2), 1f);
+        container.addView(list, topMargin(dp(8)));
+        return container;
+    }
+
+    private String table100ChoiceStateLabel(GadgetStore.Table100Choice choice) {
+        if (choice.confirmed) {
+            return "confirmado";
+        }
+        if (choice.reserved) {
+            return "reservado, em analise";
+        }
+        return "em analise";
+    }
+
     private void showTable100OwnerContactDialog(GadgetStore.Table100Payload payload) {
         String contact = payload == null ? "" : payload.ownerContact.trim();
         if (contact.isEmpty()) {
@@ -3521,7 +3680,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     }
                     String address = "manual:" + payload.tableId + ":" + number + ":" + Long.toHexString(System.currentTimeMillis());
                     gadgetStore.saveChoice(payload.tableId, address, number, name.isEmpty() ? "Pessoa externa" : name, false);
-                    chooseTable100NumberOnline(payload, number, address, name.isEmpty() ? "Pessoa externa" : name);
+                    chooseTable100NumberOnline(payload, number, address, name.isEmpty() ? "Pessoa externa" : name, false);
                     refreshTable100PlayScreen();
                 })
                 .setNegativeButton("Cancelar", null)
@@ -3559,33 +3718,53 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     .show();
         });
         row.addView(toggle);
+        row.setOnLongClickListener(v -> {
+            confirmDeleteTable100Choice(payload, choice, safeName(name, "Contato"));
+            return true;
+        });
         return row;
+    }
+
+    private void confirmDeleteTable100Choice(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String name) {
+        new AlertDialog.Builder(this)
+                .setTitle("Remover participante?")
+                .setMessage("Remova apenas em caso de desistencia, erro ou ausencia de confirmacao dentro do prazo. Esta acao libera o numero " + choice.number + " para outra pessoa, mesmo que o participante tenha feito combinados fora do app.")
+                .setPositiveButton("Remover", (dialog, which) -> {
+                    gadgetStore.removeChoice(payload.tableId, choice.address, choice.number);
+                    deleteTable100ChoiceOnline(payload, choice.address, choice.number);
+                    refreshTable100PlayScreen();
+                    Toast.makeText(this, name + " removido.", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
     }
 
     private boolean table100IsOwner(GadgetStore.Table100Payload payload) {
         return payload != null && !payload.tableId.isEmpty() && payload.tableId.equals(gadgetStore.table100InstanceId());
     }
 
-    private void sendTable100Choice(GadgetStore.Table100Payload payload, int number) {
+    private void sendTable100Choice(GadgetStore.Table100Payload payload, int number, boolean reserved, long reservationExpiresAt) {
         try {
             JSONObject json = new JSONObject();
             json.put("tableId", payload.tableId);
             json.put("number", number);
             json.put("name", profileStore.loadLocalProfile().getDisplayName());
             json.put("chooserDeviceId", StoreDeviceId.get(this));
+            json.put("reserved", reserved);
+            json.put("reservationExpiresAt", reservationExpiresAt);
             sendOrQueueOutgoing(currentRemoteAddress, messageStore.createId(), MessageStore.KIND_TABLE_100_CHOICE,
                     json.toString(), "", 0L, System.currentTimeMillis());
         } catch (Exception ignored) {
         }
     }
 
-    private void chooseTable100NumberOnline(GadgetStore.Table100Payload payload, int number, String chooserDeviceId, String chooserName) {
+    private void chooseTable100NumberOnline(GadgetStore.Table100Payload payload, int number, String chooserDeviceId, String chooserName, boolean reserved) {
         if (storePaymentClient == null || payload == null || payload.tableId.isEmpty()) {
             return;
         }
         new Thread(() -> {
             try {
-                StorePaymentClient.CartelaState state = storePaymentClient.chooseCartelaNumber(payload.tableId, chooserDeviceId, chooserName, number);
+                StorePaymentClient.CartelaState state = storePaymentClient.chooseCartelaNumber(payload.tableId, chooserDeviceId, chooserName, number, reserved);
                 gadgetStore.mergeOnlineCartela(state);
                 runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
             } catch (Exception ex) {
@@ -3639,6 +3818,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }, "nBTChat-cartela-confirm").start();
     }
 
+    private void deleteTable100ChoiceOnline(GadgetStore.Table100Payload payload, String chooserDeviceId, int number) {
+        if (storePaymentClient == null || payload == null || payload.tableId.isEmpty()) {
+            return;
+        }
+        String ownerDeviceId = StoreDeviceId.get(this);
+        new Thread(() -> {
+            try {
+                StorePaymentClient.CartelaState state = storePaymentClient.deleteCartelaChoice(payload.tableId, ownerDeviceId, chooserDeviceId, number);
+                gadgetStore.mergeOnlineCartela(state);
+                runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+            } catch (Exception ex) {
+                runOnUiThread(() -> Toast.makeText(this, "Remocao salva localmente. Vou sincronizar quando possivel.", Toast.LENGTH_LONG).show());
+            }
+        }, "nBTChat-cartela-delete").start();
+    }
+
     private boolean handleTable100Event(String address, String kind, String body) {
         if (!MessageStore.KIND_TABLE_100_CHOICE.equals(kind) && !MessageStore.KIND_TABLE_100_CONFIRM.equals(kind)) {
             return false;
@@ -3653,7 +3848,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             if (MessageStore.KIND_TABLE_100_CHOICE.equals(kind)) {
                 String name = json.optString("name", "");
                 String chooserDeviceId = json.optString("chooserDeviceId", address);
-                gadgetStore.saveChoice(tableId, chooserDeviceId, number, name, false);
+                gadgetStore.saveChoice(tableId, chooserDeviceId, number, name, false,
+                        json.optBoolean("reserved", false), json.optLong("reservationExpiresAt", 0L));
             } else {
                 boolean confirmed = json.optBoolean("confirmed", false);
                 gadgetStore.setChoiceConfirmed(tableId, address, number, confirmed);
@@ -5045,15 +5241,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
-    private void addChoiceXOverlay(Button cell) {
-        cell.setText("X");
-        cell.setTextColor(color("#DC2626"));
-        cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-    }
-
     private void setCellTextForStatus(Button cell, int status, int number, boolean fullScreen, boolean mine) {
-        if (status != 0) {
-            addChoiceXOverlay(cell);
+        if (status == 2) {
+            cell.setText("X");
+            cell.setTextColor(color("#DC2626"));
+            cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            return;
+        }
+        if (status == 1) {
+            cell.setText("\u23F3");
+            cell.setTextColor(color("#FACC15"));
+            cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             return;
         }
         cell.setText(String.valueOf(number));

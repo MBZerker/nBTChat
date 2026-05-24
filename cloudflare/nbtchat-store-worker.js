@@ -3,7 +3,7 @@ const PRODUCTS = {
     id: "cartela_de_eventos",
     title: "Cartela de eventos",
     price: 4.99,
-    durationDays: 7,
+    durationDays: 15,
     footer: "Produto destinado exclusivamente para organizacao de eventos familiares, recreativos e chas beneficentes.",
   },
 };
@@ -44,6 +44,9 @@ export default {
       }
       if (request.method === "POST" && url.pathname === "/cartela/confirm") {
         return confirmCartelaNumber(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/cartela/delete-choice") {
+        return deleteCartelaChoice(request, env);
       }
       if (request.method === "GET" && ["/success", "/pending", "/failure"].includes(url.pathname)) {
         return resultPage(url.pathname, env, url);
@@ -308,6 +311,8 @@ async function registerCartela(request, env) {
     ownerMessage: clean(data.ownerMessage),
     copyText: clean(data.copyText),
     ownerContact: clean(data.ownerContact),
+    allowReservations: !!data.allowReservations,
+    reservationHours: clampInt(data.reservationHours, 24, 1, 168),
     expiresAt: active.expiresAt,
     choices: Array.isArray(existing.choices) ? existing.choices : [],
     createdAt: existing.createdAt || Date.now(),
@@ -345,21 +350,29 @@ async function chooseCartelaNumber(request, env) {
   if (cartela.expiresAt && cartela.expiresAt <= Date.now()) {
     return json({ error: "cartela_expired" }, 410);
   }
-  cartela.choices = Array.isArray(cartela.choices) ? cartela.choices : [];
+  cartela.choices = cleanupExpiredChoices(cartela);
   const taken = cartela.choices.find((choice) => Number(choice.number) === number);
   if (taken && taken.chooserDeviceId !== chooserDeviceId) {
     return json({ error: "number_taken", cartela: publicCartela(cartela) }, 409);
   }
   if (taken) {
     taken.chooserName = chooserName || taken.chooserName || "Contato";
+    taken.reserved = !!data.reserved && !taken.confirmed && !!cartela.allowReservations;
+    taken.reservationExpiresAt = taken.reserved ? Date.now() + clampInt(cartela.reservationHours, 24, 1, 168) * 60 * 60 * 1000 : 0;
     taken.updatedAt = Date.now();
   } else {
+    const reserved = !!data.reserved;
+    if (reserved && !cartela.allowReservations) {
+      return json({ error: "reservations_disabled", cartela: publicCartela(cartela) }, 403);
+    }
     cartela.choices.push({
       id: `${chooserDeviceId}:${number}`,
       chooserDeviceId,
       chooserName: chooserName || "Contato",
       number,
       confirmed: false,
+      reserved,
+      reservationExpiresAt: reserved ? Date.now() + clampInt(cartela.reservationHours, 24, 1, 168) * 60 * 60 * 1000 : 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
@@ -391,7 +404,33 @@ async function confirmCartelaNumber(request, env) {
     return json({ error: "choice_not_found" }, 404);
   }
   choice.confirmed = !!data.confirmed;
+  if (choice.confirmed) {
+    choice.reserved = false;
+    choice.reservationExpiresAt = 0;
+  }
   choice.updatedAt = Date.now();
+  cartela.updatedAt = Date.now();
+  await writeCartela(env, cartela);
+  return json({ ok: true, cartela: publicCartela(cartela) });
+}
+
+async function deleteCartelaChoice(request, env) {
+  const data = await readBody(request);
+  const tableId = clean(data.tableId);
+  const ownerDeviceId = clean(data.ownerDeviceId);
+  const chooserDeviceId = clean(data.chooserDeviceId);
+  const number = Number.parseInt(data.number, 10);
+  if (!tableId || !ownerDeviceId || !chooserDeviceId || number < 1 || number > 100) {
+    return json({ error: "invalid_delete" }, 400);
+  }
+  const cartela = await readCartela(env, tableId);
+  if (!cartela.tableId) {
+    return json({ error: "cartela_not_found" }, 404);
+  }
+  if (cartela.ownerDeviceId !== ownerDeviceId) {
+    return json({ error: "owner_mismatch" }, 403);
+  }
+  cartela.choices = cleanupExpiredChoices(cartela).filter((item) => !(item.chooserDeviceId === chooserDeviceId && Number(item.number) === number));
   cartela.updatedAt = Date.now();
   await writeCartela(env, cartela);
   return json({ ok: true, cartela: publicCartela(cartela) });
@@ -417,6 +456,7 @@ async function writeCartela(env, cartela) {
 }
 
 function publicCartela(cartela) {
+  const choices = cleanupExpiredChoices(cartela);
   return {
     tableId: cartela.tableId || "",
     productId: cartela.productId || "cartela_de_eventos",
@@ -425,16 +465,31 @@ function publicCartela(cartela) {
     ownerMessage: cartela.ownerMessage || "",
     copyText: cartela.copyText || "",
     ownerContact: cartela.ownerContact || "",
+    allowReservations: !!cartela.allowReservations,
+    reservationHours: clampInt(cartela.reservationHours, 24, 1, 168),
     expiresAt: cartela.expiresAt || 0,
-    choices: (Array.isArray(cartela.choices) ? cartela.choices : []).map((choice) => ({
+    choices: choices.map((choice) => ({
       chooserDeviceId: choice.chooserDeviceId || "",
       chooserName: choice.chooserName || "Contato",
       number: Number(choice.number) || 0,
       confirmed: !!choice.confirmed,
+      reserved: !!choice.reserved && !choice.confirmed,
+      reservationExpiresAt: choice.confirmed ? 0 : Number(choice.reservationExpiresAt) || 0,
       updatedAt: choice.updatedAt || choice.createdAt || 0,
     })),
     updatedAt: cartela.updatedAt || 0,
   };
+}
+
+function cleanupExpiredChoices(cartela) {
+  const now = Date.now();
+  return (Array.isArray(cartela.choices) ? cartela.choices : []).filter((choice) => {
+    if (!choice || choice.confirmed || !choice.reserved) {
+      return true;
+    }
+    const expiresAt = Number(choice.reservationExpiresAt) || 0;
+    return !expiresAt || expiresAt > now;
+  });
 }
 
 function checkoutPage(url) {
@@ -460,7 +515,9 @@ function checkoutPage(url) {
     label { display: block; font-size: 13px; font-weight: 700; margin-top: 14px; }
     input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5cf; border-radius: 12px; padding: 13px; font-size: 16px; margin-top: 6px; }
     button { width: 100%; border: 0; border-radius: 14px; padding: 14px; margin-top: 18px; background: #16a34a; color: white; font-weight: 800; font-size: 16px; }
-    .price { color: #16a34a; font-weight: 800; font-size: 20px; }
+    .price { margin: 14px 0 8px; }
+    .money { color: #16a34a; font-weight: 900; font-size: 24px; }
+    .days { color: #38bdf8; font-weight: 800; font-size: 17px; margin-left: 6px; }
     .footer { font-size: 12px; color: #64748b; }
     @media (prefers-color-scheme: dark) {
       body { background: #101820; color: #f7f8f5; }
@@ -474,7 +531,7 @@ function checkoutPage(url) {
     <div class="badge">#</div>
     <h1>${escapeHtml(product.title)}</h1>
     <p>100 numeros interativos para enviar em conversas do nBTChat.</p>
-    <p class="price">R$ ${product.price.toFixed(2).replace(".", ",")} por ${product.durationDays} dias</p>
+    <p class="price"><span class="money">R$ ${product.price.toFixed(2).replace(".", ",")}</span><span class="days">${product.durationDays} dias</span></p>
     <form method="post" action="/create-payment">
       <input type="hidden" name="productId" value="${escapeHtml(product.id)}">
       <input type="hidden" name="deviceId" value="${escapeHtml(deviceId)}">
@@ -677,6 +734,14 @@ function html(value, status = 200) {
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function clampInt(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, parsed));
 }
 
 function onlyDigits(value) {

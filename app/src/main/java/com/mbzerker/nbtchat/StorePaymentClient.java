@@ -43,7 +43,8 @@ public final class StorePaymentClient {
     }
 
     public CartelaState registerCartela(String tableId, String ownerDeviceId, String ownerName,
-                                        String ownerMessage, String copyText, String ownerContact) throws Exception {
+                                        String ownerMessage, String copyText, String ownerContact,
+                                        boolean allowReservations, int reservationHours) throws Exception {
         JSONObject body = new JSONObject();
         body.put("tableId", tableId == null ? "" : tableId);
         body.put("ownerDeviceId", ownerDeviceId == null ? "" : ownerDeviceId);
@@ -51,6 +52,8 @@ public final class StorePaymentClient {
         body.put("ownerMessage", ownerMessage == null ? "" : ownerMessage);
         body.put("copyText", copyText == null ? "" : copyText);
         body.put("ownerContact", ownerContact == null ? "" : ownerContact);
+        body.put("allowReservations", allowReservations);
+        body.put("reservationHours", Math.max(1, Math.min(168, reservationHours)));
         return CartelaState.fromJson(post("/cartela/register", body).optJSONObject("cartela"));
     }
 
@@ -59,12 +62,13 @@ public final class StorePaymentClient {
         return CartelaState.fromJson(json.optJSONObject("cartela"));
     }
 
-    public CartelaState chooseCartelaNumber(String tableId, String chooserDeviceId, String chooserName, int number) throws Exception {
+    public CartelaState chooseCartelaNumber(String tableId, String chooserDeviceId, String chooserName, int number, boolean reserved) throws Exception {
         JSONObject body = new JSONObject();
         body.put("tableId", tableId == null ? "" : tableId);
         body.put("chooserDeviceId", chooserDeviceId == null ? "" : chooserDeviceId);
         body.put("chooserName", chooserName == null ? "" : chooserName);
         body.put("number", number);
+        body.put("reserved", reserved);
         return CartelaState.fromJson(post("/cartela/choose", body).optJSONObject("cartela"));
     }
 
@@ -76,6 +80,15 @@ public final class StorePaymentClient {
         body.put("number", number);
         body.put("confirmed", confirmed);
         return CartelaState.fromJson(post("/cartela/confirm", body).optJSONObject("cartela"));
+    }
+
+    public CartelaState deleteCartelaChoice(String tableId, String ownerDeviceId, String chooserDeviceId, int number) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("tableId", tableId == null ? "" : tableId);
+        body.put("ownerDeviceId", ownerDeviceId == null ? "" : ownerDeviceId);
+        body.put("chooserDeviceId", chooserDeviceId == null ? "" : chooserDeviceId);
+        body.put("number", number);
+        return CartelaState.fromJson(post("/cartela/delete-choice", body).optJSONObject("cartela"));
     }
 
     private JSONObject request(String path) throws Exception {
@@ -195,10 +208,13 @@ public final class StorePaymentClient {
         public final String copyText;
         public final String ownerContact;
         public final long expiresAt;
+        public final boolean allowReservations;
+        public final int reservationHours;
         public final ArrayList<CartelaChoice> choices;
 
         CartelaState(String tableId, String ownerDeviceId, String ownerName, String ownerMessage,
-                     String copyText, String ownerContact, long expiresAt, ArrayList<CartelaChoice> choices) {
+                     String copyText, String ownerContact, long expiresAt, boolean allowReservations,
+                     int reservationHours, ArrayList<CartelaChoice> choices) {
             this.tableId = tableId == null ? "" : tableId;
             this.ownerDeviceId = ownerDeviceId == null ? "" : ownerDeviceId;
             this.ownerName = ownerName == null ? "" : ownerName;
@@ -206,12 +222,14 @@ public final class StorePaymentClient {
             this.copyText = copyText == null ? "" : copyText;
             this.ownerContact = ownerContact == null ? "" : ownerContact;
             this.expiresAt = expiresAt;
+            this.allowReservations = allowReservations;
+            this.reservationHours = Math.max(1, Math.min(168, reservationHours));
             this.choices = choices == null ? new ArrayList<>() : choices;
         }
 
         static CartelaState fromJson(JSONObject json) {
             if (json == null) {
-                return new CartelaState("", "", "", "", "", "", 0L, new ArrayList<>());
+                return new CartelaState("", "", "", "", "", "", 0L, false, 24, new ArrayList<>());
             }
             ArrayList<CartelaChoice> choices = new ArrayList<>();
             JSONArray rawChoices = json.optJSONArray("choices");
@@ -225,7 +243,9 @@ public final class StorePaymentClient {
                             item.optString("chooserDeviceId", ""),
                             item.optString("chooserName", ""),
                             item.optInt("number", 0),
-                            item.optBoolean("confirmed", false)
+                            item.optBoolean("confirmed", false),
+                            item.optBoolean("reserved", false),
+                            item.optLong("reservationExpiresAt", 0L)
                     ));
                 }
             }
@@ -237,6 +257,8 @@ public final class StorePaymentClient {
                     json.optString("copyText", ""),
                     json.optString("ownerContact", ""),
                     json.optLong("expiresAt", 0L),
+                    json.optBoolean("allowReservations", false),
+                    json.optInt("reservationHours", 24),
                     choices
             );
         }
@@ -247,12 +269,16 @@ public final class StorePaymentClient {
         public final String chooserName;
         public final int number;
         public final boolean confirmed;
+        public final boolean reserved;
+        public final long reservationExpiresAt;
 
-        CartelaChoice(String chooserDeviceId, String chooserName, int number, boolean confirmed) {
+        CartelaChoice(String chooserDeviceId, String chooserName, int number, boolean confirmed, boolean reserved, long reservationExpiresAt) {
             this.chooserDeviceId = chooserDeviceId == null ? "" : chooserDeviceId;
             this.chooserName = chooserName == null ? "" : chooserName;
             this.number = number;
             this.confirmed = confirmed;
+            this.reserved = reserved && !confirmed;
+            this.reservationExpiresAt = confirmed ? 0L : reservationExpiresAt;
         }
     }
 }

@@ -26,8 +26,11 @@ public final class GadgetStore {
     private static final String KEY_TABLE_100_PENDING_URL = "table100_pending_url";
     private static final String KEY_TABLE_100_PENDING_DEVICE = "table100_pending_device";
     private static final String KEY_TABLE_100_PENDING_AT = "table100_pending_at";
-    private static final long WEEK_MS = 7L * 24L * 60L * 60L * 1000L;
+    private static final String KEY_TABLE_100_RESERVATIONS = "table100_reservations";
+    private static final String KEY_TABLE_100_RESERVATION_HOURS = "table100_reservation_hours";
+    private static final long FIFTEEN_DAYS_MS = 15L * 24L * 60L * 60L * 1000L;
     private static final long PENDING_PAYMENT_TTL_MS = 24L * 60L * 60L * 1000L;
+    private static final int DEFAULT_RESERVATION_HOURS = 24;
 
     private final EncryptedPrefs prefs;
 
@@ -44,7 +47,7 @@ public final class GadgetStore {
     }
 
     public void buyTable100() {
-        activateTable100Until(System.currentTimeMillis() + WEEK_MS);
+        activateTable100Until(System.currentTimeMillis() + FIFTEEN_DAYS_MS);
     }
 
     public void activateTable100Until(long expiresAt) {
@@ -116,6 +119,23 @@ public final class GadgetStore {
         return prefs.getString(KEY_TABLE_100_OWNER_CONTACT, "");
     }
 
+    public boolean table100ReservationsEnabled() {
+        return prefs.getBoolean(KEY_TABLE_100_RESERVATIONS, false);
+    }
+
+    public int table100ReservationHours() {
+        int hours = (int) prefs.getLong(KEY_TABLE_100_RESERVATION_HOURS, DEFAULT_RESERVATION_HOURS);
+        return Math.max(1, Math.min(168, hours));
+    }
+
+    public void saveTable100ReservationSettings(boolean enabled, int hours) {
+        int cleanHours = Math.max(1, Math.min(168, hours));
+        prefs.edit()
+                .putBoolean(KEY_TABLE_100_RESERVATIONS, enabled)
+                .putLong(KEY_TABLE_100_RESERVATION_HOURS, cleanHours)
+                .apply();
+    }
+
     public String table100InstanceId() {
         String id = prefs.getString(KEY_TABLE_100_INSTANCE, "");
         if (id == null || id.trim().isEmpty()) {
@@ -144,16 +164,27 @@ public final class GadgetStore {
 
     public Table100Payload table100Payload() {
         String tableId = table100InstanceId();
-        return new Table100Payload(tableId, table100OwnerMessage(), table100CopyText(), table100OwnerContact(), lockedNumbers(tableId));
+        return new Table100Payload(tableId, table100OwnerMessage(), table100CopyText(), table100OwnerContact(),
+                "", lockedNumbers(tableId), table100ReservationsEnabled(), table100ReservationHours());
     }
 
     public void mergeOnlineCartela(StorePaymentClient.CartelaState state) {
         if (state == null || state.tableId.isEmpty()) {
             return;
         }
-        for (StorePaymentClient.CartelaChoice choice : state.choices) {
-            saveChoice(state.tableId, choice.chooserDeviceId, choice.number, choice.chooserName, choice.confirmed);
+        if (state.tableId.equals(currentTable100InstanceId())) {
+            saveTable100ReservationSettings(state.allowReservations, state.reservationHours);
         }
+        removeChoicesForTable(state.tableId);
+        for (StorePaymentClient.CartelaChoice choice : state.choices) {
+            saveChoice(state.tableId, choice.chooserDeviceId, choice.number, choice.chooserName,
+                    choice.confirmed, choice.reserved, choice.reservationExpiresAt);
+        }
+    }
+
+    private String currentTable100InstanceId() {
+        String id = prefs.getString(KEY_TABLE_100_INSTANCE, "");
+        return id == null ? "" : id;
     }
 
     public List<Integer> lockedNumbers(String tableId) {
@@ -167,6 +198,10 @@ public final class GadgetStore {
     }
 
     public void saveChoice(String tableId, String address, int number, String name, boolean confirmed) {
+        saveChoice(tableId, address, number, name, confirmed, false, 0L);
+    }
+
+    public void saveChoice(String tableId, String address, int number, String name, boolean confirmed, boolean reserved, long reservationExpiresAt) {
         if (tableId == null || tableId.trim().isEmpty() || address == null || address.trim().isEmpty() || number < 1 || number > 100) {
             return;
         }
@@ -180,6 +215,8 @@ public final class GadgetStore {
                         && number == item.optInt("number", -1)) {
                     item.put("name", clean(name));
                     item.put("confirmed", confirmed);
+                    item.put("reserved", reserved && !confirmed);
+                    item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
                     changed = true;
                     break;
                 }
@@ -191,6 +228,8 @@ public final class GadgetStore {
                 item.put("number", number);
                 item.put("name", clean(name));
                 item.put("confirmed", confirmed);
+                item.put("reserved", reserved && !confirmed);
+                item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
                 items.put(item);
             }
             prefs.edit().putString(KEY_TABLE_100_CHOICES, items.toString()).apply();
@@ -210,6 +249,10 @@ public final class GadgetStore {
                         && address.equals(item.optString("address", ""))
                         && number == item.optInt("number", -1)) {
                     item.put("confirmed", confirmed);
+                    if (confirmed) {
+                        item.put("reserved", false);
+                        item.put("reservationExpiresAt", 0L);
+                    }
                     prefs.edit().putString(KEY_TABLE_100_CHOICES, items.toString()).apply();
                     return;
                 }
@@ -243,6 +286,24 @@ public final class GadgetStore {
         }
     }
 
+    private void removeChoicesForTable(String tableId) {
+        if (tableId == null) {
+            return;
+        }
+        try {
+            JSONArray items = rawChoices();
+            JSONArray kept = new JSONArray();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                if (!tableId.equals(item.optString("tableId", ""))) {
+                    kept.put(item);
+                }
+            }
+            prefs.edit().putString(KEY_TABLE_100_CHOICES, kept.toString()).apply();
+        } catch (JSONException ignored) {
+        }
+    }
+
     public int choiceStatus(String tableId, String address, int number) {
         if (tableId == null || address == null) {
             return 0;
@@ -253,6 +314,28 @@ public final class GadgetStore {
             }
         }
         return 0;
+    }
+
+    public Table100Choice choiceForNumber(String tableId, int number) {
+        for (Table100Choice choice : loadChoices(tableId)) {
+            if (choice.number == number) {
+                return choice;
+            }
+        }
+        return null;
+    }
+
+    public List<Table100Choice> choicesForAddress(String tableId, String address) {
+        List<Table100Choice> choices = new ArrayList<>();
+        if (address == null) {
+            return choices;
+        }
+        for (Table100Choice choice : loadChoices(tableId)) {
+            if (address.equals(choice.address)) {
+                choices.add(choice);
+            }
+        }
+        return choices;
     }
 
     public List<Table100Choice> loadChoices(String tableId) {
@@ -269,7 +352,9 @@ public final class GadgetStore {
                             item.optString("address", ""),
                             item.optString("name", ""),
                             item.optInt("number", 0),
-                            item.optBoolean("confirmed", false)
+                            item.optBoolean("confirmed", false),
+                            item.optBoolean("reserved", false),
+                            item.optLong("reservationExpiresAt", 0L)
                     ));
                 }
             }
@@ -294,6 +379,8 @@ public final class GadgetStore {
         public final String ownerContact;
         public final String ownerDeviceId;
         public final List<Integer> lockedNumbers;
+        public final boolean allowReservations;
+        public final int reservationHours;
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact) {
             this(tableId, ownerMessage, copyText, ownerContact, "", new ArrayList<>());
@@ -304,12 +391,19 @@ public final class GadgetStore {
         }
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact, String ownerDeviceId, List<Integer> lockedNumbers) {
+            this(tableId, ownerMessage, copyText, ownerContact, ownerDeviceId, lockedNumbers, false, DEFAULT_RESERVATION_HOURS);
+        }
+
+        Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact,
+                        String ownerDeviceId, List<Integer> lockedNumbers, boolean allowReservations, int reservationHours) {
             this.tableId = tableId == null ? "" : tableId;
             this.ownerMessage = ownerMessage == null ? "" : ownerMessage;
             this.copyText = copyText == null ? "" : copyText;
             this.ownerContact = ownerContact == null ? "" : ownerContact;
             this.ownerDeviceId = ownerDeviceId == null ? "" : ownerDeviceId;
             this.lockedNumbers = cleanLockedNumbers(lockedNumbers);
+            this.allowReservations = allowReservations;
+            this.reservationHours = Math.max(1, Math.min(168, reservationHours));
         }
 
         public String toMessageBody() {
@@ -322,6 +416,8 @@ public final class GadgetStore {
                 json.put("ownerContact", ownerContact);
                 json.put("ownerDeviceId", ownerDeviceId);
                 json.put("lockedNumbers", numbersToJson(lockedNumbers));
+                json.put("allowReservations", allowReservations);
+                json.put("reservationHours", reservationHours);
                 return json.toString();
             } catch (JSONException ignored) {
                 return copyText;
@@ -345,7 +441,9 @@ public final class GadgetStore {
                             json.optString("copyText", ""),
                             json.optString("ownerContact", ""),
                             json.optString("ownerDeviceId", ""),
-                            numbersFromJson(json.optJSONArray("lockedNumbers"))
+                            numbersFromJson(json.optJSONArray("lockedNumbers")),
+                            json.optBoolean("allowReservations", false),
+                            json.optInt("reservationHours", DEFAULT_RESERVATION_HOURS)
                     );
                 }
             } catch (JSONException ignored) {
@@ -394,12 +492,20 @@ public final class GadgetStore {
         public final String name;
         public final int number;
         public final boolean confirmed;
+        public final boolean reserved;
+        public final long reservationExpiresAt;
 
         Table100Choice(String address, String name, int number, boolean confirmed) {
+            this(address, name, number, confirmed, false, 0L);
+        }
+
+        Table100Choice(String address, String name, int number, boolean confirmed, boolean reserved, long reservationExpiresAt) {
             this.address = address == null ? "" : address;
             this.name = name == null ? "" : name;
             this.number = number;
             this.confirmed = confirmed;
+            this.reserved = reserved && !confirmed;
+            this.reservationExpiresAt = confirmed ? 0L : reservationExpiresAt;
         }
     }
 }

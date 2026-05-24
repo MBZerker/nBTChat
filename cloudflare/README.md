@@ -18,5 +18,6 @@ Worker publico usado pela loja do nBTChat.
 - `GET /cartela/state?tableId=...`: consulta numeros escolhidos/confirmados da cartela.
 - `POST /cartela/choose`: marca um numero como escolhido, impedindo duplicidade.
 - `POST /cartela/confirm`: dono confirma ou remove confirmacao de uma escolha.
+- `POST /cartela/delete-choice`: dono remove um participante e libera o numero.
 
 O app nao precisa carregar chave secreta. Nome e CPF ficam no fluxo do Worker/Mercado Pago; o app envia apenas o `deviceId` pseudonimo e consulta a liberacao. O codigo de recuperacao e mostrado antes do pagamento e deve ser guardado pelo comprador.
