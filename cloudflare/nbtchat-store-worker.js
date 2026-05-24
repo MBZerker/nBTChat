@@ -34,7 +34,7 @@ export default {
         return entitlement(env, url);
       }
       if (request.method === "GET" && ["/success", "/pending", "/failure"].includes(url.pathname)) {
-        return resultPage(url.pathname);
+        return resultPage(url.pathname, env, url);
       }
       return json({ error: "not_found" }, 404);
     } catch (error) {
@@ -58,12 +58,17 @@ async function createPayment(request, env, url) {
   }
 
   const externalReference = `nbtchat:${product.id}:${deviceId}:${Date.now()}`;
+  const recoveryCode = generateRecoveryCode();
+  const recoveryCodeHash = await sha256(normalizeRecoveryCode(recoveryCode));
   await env.STORE.put(`pending:${externalReference}`, JSON.stringify({
     productId: product.id,
     deviceId,
     buyerName,
     cpfHash: await sha256(buyerCpf),
     cpfLast4: buyerCpf.slice(-4),
+    recoveryCode,
+    recoveryCodeHash,
+    recoveryCodeHint: recoveryCode.slice(-4),
     createdAt: Date.now(),
   }), { expirationTtl: 2 * 24 * 60 * 60 });
 
@@ -106,7 +111,7 @@ async function createPayment(request, env, url) {
   }
 
   if (isFormRequest(request)) {
-    return Response.redirect(body.init_point || body.sandbox_init_point, 303);
+    return recoveryCodePage(product, recoveryCode, preferenceCheckoutUrl(body, env));
   }
   return json({
     preferenceId: body.id,
@@ -138,109 +143,111 @@ async function mercadoPagoWebhook(request, env, url) {
     return json({ ok: true, status: payment.status || "" });
   }
 
-  const pendingRaw = await env.STORE.get(`pending:${payment.external_reference}`);
+  const activation = await activateApprovedPayment(env, payment, paymentId);
+  return json({ ok: true, activated: activation.activated || false, skipped: activation.skipped || "" });
+}
+
+async function activateApprovedPayment(env, payment, paymentId) {
+  const externalReference = clean(payment.external_reference);
+  const productId = externalReference.split(":")[1] || "";
+  const product = PRODUCTS[productId];
+  if (!product) {
+    return { activated: false, skipped: "product_not_found" };
+  }
+
+  const existingRaw = await env.STORE.get(`payment:${paymentId}:${product.id}`);
+  if (existingRaw) {
+    const existing = JSON.parse(existingRaw);
+    await writeEntitlement(env, existing.deviceId, product, existing);
+    const pendingRaw = await env.STORE.get(`pending:${externalReference}`);
+    const pending = pendingRaw ? JSON.parse(pendingRaw) : null;
+    return {
+      activated: true,
+      product,
+      paymentRecord: existing,
+      recoveryCode: pending?.recoveryCode || "",
+    };
+  }
+
+  const pendingRaw = await env.STORE.get(`pending:${externalReference}`);
   if (!pendingRaw) {
-    return json({ ok: true, skipped: "pending_not_found" });
+    return { activated: false, skipped: "pending_not_found" };
   }
   const pending = JSON.parse(pendingRaw);
-  const product = PRODUCTS[pending.productId];
-  if (!product) {
-    return json({ ok: true, skipped: "product_not_found" });
+  if (pending.productId !== product.id) {
+    return { activated: false, skipped: "product_mismatch" };
   }
 
   const expiresAt = Date.now() + product.durationDays * 24 * 60 * 60 * 1000;
-  await env.STORE.put(`entitlement:${pending.deviceId}:${product.id}`, JSON.stringify({
+  const recoveryCodeHash = pending.recoveryCodeHash || await sha256(normalizeRecoveryCode(pending.recoveryCode || ""));
+  const paymentRecord = {
+    productId: product.id,
+    title: product.title,
+    deviceId: pending.deviceId,
+    paymentId: String(paymentId),
+    externalReference,
+    buyerName: pending.buyerName,
+    cpfHash: pending.cpfHash,
+    cpfLast4: pending.cpfLast4,
+    recoveryCodeHash,
+    recoveryCodeHint: pending.recoveryCodeHint || (pending.recoveryCode || "").slice(-4),
+    approvedAt: payment.date_approved || payment.date_created || new Date().toISOString(),
+    expiresAt,
+    updatedAt: Date.now(),
+  };
+  await writeEntitlement(env, pending.deviceId, product, paymentRecord);
+  await env.STORE.put(`payment:${paymentId}:${product.id}`, JSON.stringify(paymentRecord));
+  await env.STORE.put(`recovery:${product.id}:${recoveryCodeHash}`, JSON.stringify(paymentRecord));
+  return {
+    activated: true,
+    product,
+    paymentRecord,
+    recoveryCode: pending.recoveryCode || "",
+  };
+}
+
+async function writeEntitlement(env, deviceId, product, record) {
+  await env.STORE.put(`entitlement:${deviceId}:${product.id}`, JSON.stringify({
     active: true,
     productId: product.id,
     title: product.title,
-    expiresAt,
-    paymentId: String(paymentId),
-    externalReference: payment.external_reference,
-    buyerName: pending.buyerName,
-    cpfHash: pending.cpfHash,
-    cpfLast4: pending.cpfLast4,
+    expiresAt: record.expiresAt,
+    paymentId: String(record.paymentId || ""),
+    externalReference: record.externalReference || "",
+    buyerName: record.buyerName || "",
+    cpfHash: record.cpfHash || "",
+    cpfLast4: record.cpfLast4 || "",
+    recoveryCodeHash: record.recoveryCodeHash || "",
+    recoveryCodeHint: record.recoveryCodeHint || "",
     updatedAt: Date.now(),
   }));
-  await env.STORE.put(`payment:${paymentId}:${product.id}`, JSON.stringify({
-    productId: product.id,
-    title: product.title,
-    paymentId: String(paymentId),
-    externalReference: payment.external_reference,
-    buyerName: pending.buyerName,
-    cpfHash: pending.cpfHash,
-    cpfLast4: pending.cpfLast4,
-    approvedAt: payment.date_approved || payment.date_created || new Date().toISOString(),
-    expiresAt,
-  }));
-  await env.STORE.delete(`pending:${payment.external_reference}`);
-  return json({ ok: true });
 }
 
 async function recoverPurchase(request, env) {
   const data = await readBody(request);
   const product = PRODUCTS[data.productId || "cartela_de_eventos"];
   const deviceId = clean(data.deviceId);
-  const paymentId = onlyDigits(data.paymentId);
+  const normalizedRecoveryCode = normalizeRecoveryCode(data.recoveryCode);
+  const recoveryCodeHash = normalizedRecoveryCode ? await sha256(normalizedRecoveryCode) : "";
   const buyerCpf = onlyDigits(data.buyerCpf);
-  if (!product || !deviceId || !paymentId || buyerCpf.length !== 11) {
-    return resultHtml("Dados incompletos", "Confira CPF e ID do pagamento e tente novamente.", false);
+  if (!product || !deviceId || !recoveryCodeHash || buyerCpf.length !== 11) {
+    return resultHtml("Dados incompletos", "Confira CPF e codigo de recuperacao e tente novamente.", false);
   }
 
   const cpfHash = await sha256(buyerCpf);
-  let paymentRecord = null;
-  const indexed = await env.STORE.get(`payment:${paymentId}:${product.id}`);
-  if (indexed) {
-    paymentRecord = JSON.parse(indexed);
-    if (paymentRecord.cpfHash !== cpfHash) {
-      return resultHtml("Nao foi possivel recuperar", "O CPF informado nao confere com esse pagamento.", false);
-    }
-  } else {
-    const mp = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: { Authorization: `Bearer ${env.MP_ACCESS_TOKEN}` },
-    });
-    if (!mp.ok) {
-      return resultHtml("Pagamento nao encontrado", "Confira o ID do pagamento no comprovante do Mercado Pago.", false);
-    }
-    const payment = await mp.json();
-    const paidCpf = onlyDigits(payment?.payer?.identification?.number);
-    if (payment.status !== "approved"
-        || !payment.external_reference
-        || !payment.external_reference.startsWith(`nbtchat:${product.id}:`)
-        || (paidCpf && paidCpf !== buyerCpf)) {
-      return resultHtml("Nao foi possivel recuperar", "Esse pagamento nao esta aprovado para este produto ou o CPF nao confere.", false);
-    }
-    const approvedAt = payment.date_approved || payment.date_created || new Date().toISOString();
-    const expiresAt = new Date(approvedAt).getTime() + product.durationDays * 24 * 60 * 60 * 1000;
-    paymentRecord = {
-      productId: product.id,
-      title: product.title,
-      paymentId: String(paymentId),
-      externalReference: payment.external_reference,
-      buyerName: clean(payment?.payer?.first_name || ""),
-      cpfHash,
-      cpfLast4: buyerCpf.slice(-4),
-      approvedAt,
-      expiresAt,
-    };
-    await env.STORE.put(`payment:${paymentId}:${product.id}`, JSON.stringify(paymentRecord));
+  const indexed = await env.STORE.get(`recovery:${product.id}:${recoveryCodeHash}`);
+  if (!indexed) {
+    return resultHtml("Codigo nao encontrado", "Confira o codigo de recuperacao nBTChat. Ele foi mostrado antes de ir ao Mercado Pago.", false);
   }
-
+  const paymentRecord = JSON.parse(indexed);
+  if (paymentRecord.cpfHash !== cpfHash || paymentRecord.recoveryCodeHash !== recoveryCodeHash) {
+    return resultHtml("Nao foi possivel recuperar", "O CPF informado nao confere com essa compra.", false);
+  }
   if (!paymentRecord.expiresAt || paymentRecord.expiresAt <= Date.now()) {
     return resultHtml("Compra expirada", "O periodo de uso dessa compra ja terminou.", false);
   }
 
-  await env.STORE.put(`entitlement:${deviceId}:${product.id}`, JSON.stringify({
-    active: true,
-    productId: product.id,
-    title: product.title,
-    expiresAt: paymentRecord.expiresAt,
-    paymentId: String(paymentId),
-    externalReference: paymentRecord.externalReference || "",
-    buyerName: paymentRecord.buyerName || "",
-    cpfHash,
-    cpfLast4: buyerCpf.slice(-4),
-    recoveredAt: Date.now(),
-  }));
+  await writeEntitlement(env, deviceId, product, paymentRecord);
   return resultHtml("Compra recuperada", "Volte ao nBTChat e toque em verificar para liberar a Cartela de eventos.", true);
 }
 
@@ -319,6 +326,66 @@ function checkoutPage(url) {
 </html>`);
 }
 
+function recoveryCodePage(product, recoveryCode, checkoutUrl) {
+  const safeCode = escapeHtml(recoveryCode);
+  const note = `nBTChat - ${product.title}\nCodigo de recuperacao: ${recoveryCode}\nGuarde este codigo junto com o CPF usado na compra.`;
+  const nextAction = checkoutUrl && checkoutUrl !== "#"
+      ? `<a class="button" href="${escapeHtml(checkoutUrl)}">Continuar para o Mercado Pago</a>`
+      : `<p class="warning">Volte ao nBTChat e toque em verificar para liberar a Cartela de eventos.</p>`;
+  return html(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codigo de recuperacao - nBTChat</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Arial, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f7f5; color: #17212b; }
+    main { width: min(92vw, 460px); background: white; border: 1px solid #d7ddd8; border-radius: 18px; padding: 24px; box-shadow: 0 16px 50px #0002; }
+    h1 { margin: 0; font-size: 27px; }
+    p { line-height: 1.45; color: #52606d; }
+    .code { margin: 18px 0; padding: 18px; text-align: center; border-radius: 16px; border: 1px solid #16a34a; background: #ddf7e8; color: #14532d; font-size: 24px; font-weight: 900; letter-spacing: 1px; user-select: all; }
+    button, a.button { display: block; width: 100%; box-sizing: border-box; border: 0; border-radius: 14px; padding: 14px; margin-top: 10px; background: #16a34a; color: white; font-weight: 800; font-size: 16px; text-align: center; text-decoration: none; }
+    button.secondary { background: #eef2f0; color: #17212b; }
+    .warning { font-size: 13px; color: #64748b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #101820; color: #f7f8f5; }
+      main { background: #18232c; border-color: #2f3b45; }
+      .code { background: #123328; color: #bbf7d0; }
+      button.secondary { background: #24313b; color: #f7f8f5; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Guarde seu codigo</h1>
+    <p>Este codigo recupera a compra se o app for reinstalado ou o aparelho perder os dados. Guarde em local seguro, como gerenciador de senhas, nuvem pessoal, bloco de notas privado ou tire um print.</p>
+    <div class="code" id="code">${safeCode}</div>
+    <button type="button" onclick="copyCode()">Copiar codigo</button>
+    <button type="button" class="secondary" onclick="downloadCode()">Baixar TXT</button>
+    <button type="button" class="secondary" onclick="window.print()">Imprimir ou salvar PDF</button>
+    ${nextAction}
+    <p class="warning">Para recuperar depois, sera necessario informar este codigo e o CPF usado na compra.</p>
+  </main>
+  <script>
+    const recoveryText = ${JSON.stringify(note)};
+    function copyCode() {
+      navigator.clipboard?.writeText(document.getElementById("code").textContent.trim());
+    }
+    function downloadCode() {
+      const blob = new Blob([recoveryText], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "nbtchat-codigo-recuperacao.txt";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  </script>
+</body>
+</html>`);
+}
+
 function recoverPage(url) {
   const productId = clean(url.searchParams.get("productId") || "cartela_de_eventos");
   const deviceId = clean(url.searchParams.get("deviceId"));
@@ -354,17 +421,17 @@ function recoverPage(url) {
   <main>
     <div class="badge">#</div>
     <h1>Recuperar compra</h1>
-    <p>Informe o CPF usado na compra e o ID do pagamento aprovado no Mercado Pago.</p>
+    <p>Informe o CPF usado na compra e o codigo de recuperacao nBTChat.</p>
     <form method="post" action="/recover-purchase">
       <input type="hidden" name="productId" value="${escapeHtml(product.id)}">
       <input type="hidden" name="deviceId" value="${escapeHtml(deviceId)}">
       <label>CPF</label>
       <input name="buyerCpf" inputmode="numeric" autocomplete="off" required minlength="11" maxlength="14">
-      <label>ID do pagamento</label>
-      <input name="paymentId" inputmode="numeric" autocomplete="off" required minlength="5" maxlength="32">
+      <label>Codigo de recuperacao nBTChat</label>
+      <input name="recoveryCode" autocomplete="off" required minlength="8" maxlength="24" placeholder="NBT-ABCD-1234">
       <button type="submit">Recuperar ${escapeHtml(product.title)}</button>
     </form>
-    <p class="footer">O ID do pagamento aparece no comprovante ou nos detalhes do pagamento no Mercado Pago.</p>
+    <p class="footer">Esse codigo foi mostrado antes de continuar para o Mercado Pago.</p>
   </main>
 </body>
 </html>`);
@@ -375,12 +442,45 @@ function resultHtml(title, body, ok) {
   return html(`<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:32px;max-width:520px;margin:auto;line-height:1.45}h1{color:${color}}</style><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p>`);
 }
 
-function resultPage(path) {
+async function resultPage(path, env, url) {
+  if (path === "/success") {
+    const paymentId = paymentIdFromUrl(url);
+    if (paymentId) {
+      const payment = await fetchPayment(env, paymentId);
+      if (payment && payment.status === "approved") {
+        const activation = await activateApprovedPayment(env, payment, paymentId);
+        if (activation.activated && activation.recoveryCode) {
+          return recoveryCodePage(activation.product, activation.recoveryCode, "#");
+        }
+      }
+    }
+  }
   const title = path === "/success" ? "Pagamento aprovado" : path === "/pending" ? "Pagamento pendente" : "Pagamento nao concluido";
   const body = path === "/success"
-    ? "Volte ao nBTChat para liberar sua Cartela de eventos."
+    ? "Volte ao nBTChat para liberar sua Cartela de eventos. Se voce nao salvou o codigo de recuperacao antes do pagamento, procure o comprovante e entre em contato com o dono da loja."
     : "Voce pode voltar ao nBTChat e verificar novamente daqui a pouco.";
   return html(`<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:32px;max-width:520px;margin:auto;line-height:1.45}</style><h1>${title}</h1><p>${body}</p>`);
+}
+
+async function fetchPayment(env, paymentId) {
+  const mp = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+    headers: { Authorization: `Bearer ${env.MP_ACCESS_TOKEN}` },
+  });
+  return mp.ok ? mp.json() : null;
+}
+
+function paymentIdFromUrl(url) {
+  return onlyDigits(url.searchParams.get("payment_id")
+      || url.searchParams.get("collection_id")
+      || url.searchParams.get("id")
+      || "");
+}
+
+function preferenceCheckoutUrl(body, env) {
+  const testToken = clean(env.MP_ACCESS_TOKEN).startsWith("TEST-");
+  return testToken
+    ? body.sandbox_init_point || body.init_point
+    : body.init_point || body.sandbox_init_point;
 }
 
 async function readBody(request) {
@@ -417,6 +517,25 @@ function clean(value) {
 
 function onlyDigits(value) {
   return clean(value).replace(/\D+/g, "");
+}
+
+function generateRecoveryCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  let raw = "";
+  for (const byte of bytes) {
+    raw += alphabet[byte % alphabet.length];
+  }
+  return `NBT-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+}
+
+function normalizeRecoveryCode(value) {
+  const raw = clean(value).toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!raw) {
+    return "";
+  }
+  return raw.startsWith("NBT") ? raw : `NBT${raw}`;
 }
 
 async function sha256(value) {

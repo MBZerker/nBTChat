@@ -2160,7 +2160,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Uri checkoutUri = storePaymentClient.cartelaCheckoutUri(deviceId);
         gadgetStore.savePendingTable100Payment(checkoutUri.toString(), deviceId);
         openExternalLink(checkoutUri);
-        Toast.makeText(this, "Conclua o pagamento e volte ao nBTChat.", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Salve o codigo de recuperacao, conclua o pagamento e volte ao nBTChat.", Toast.LENGTH_LONG).show();
         showStoreScreen();
     }
 
@@ -2169,7 +2169,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Uri recoveryUri = storePaymentClient.cartelaRecoveryUri(deviceId);
         gadgetStore.savePendingTable100Payment(recoveryUri.toString(), deviceId);
         openExternalLink(recoveryUri);
-        Toast.makeText(this, "Informe CPF e ID do pagamento. Depois volte ao nBTChat.", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Informe CPF e codigo de recuperacao. Depois volte ao nBTChat.", Toast.LENGTH_LONG).show();
         showStoreScreen();
     }
 
