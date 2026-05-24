@@ -271,7 +271,7 @@ public final class MessageStore {
             return message.mine ? "Voce enviou uma mensagem de voz" : "Mensagem de voz";
         }
         if (KIND_TABLE_100.equals(message.kind)) {
-            return message.mine ? "Voce enviou uma tabela 100" : "Tabela 100";
+            return message.mine ? "Voce enviou uma cartela de eventos" : GadgetStore.TABLE_100_TITLE;
         }
         if (KIND_CONTACT_INVITE.equals(message.kind)) {
             return message.mine ? "Voce enviou um contato" : "Contato nBTChat";

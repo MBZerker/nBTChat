@@ -2,6 +2,9 @@ plugins {
     id "com.android.application"
 }
 
+def quoteBuildConfig = { value ->
+    "\"" + value.toString().replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
 android {
     namespace "com.mbzerker.nbtchat"
     compileSdk 35
@@ -10,8 +13,13 @@ android {
         applicationId "com.mbzerker.nbtchat"
         minSdk 26
         targetSdk 35
-        versionCode 17
-        versionName "0.3.5"
+        versionCode 18
+        versionName "0.3.6"
+        buildConfigField "String", "NBTCHAT_STORE_BASE_URL", quoteBuildConfig("https://nbtchat-store.nectof.workers.dev")
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     compileOptions {

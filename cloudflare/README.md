@@ -1,0 +1,17 @@
+# nBTChat Store Worker
+
+Worker publico usado pela loja do nBTChat.
+
+## Bindings esperados
+
+- `MP_ACCESS_TOKEN`: secret do Mercado Pago. Use teste enquanto estiver no ambiente de teste e producao quando publicar de verdade.
+- `STORE`: binding do Workers KV apontando para o namespace `NBTCHAT_STORE`.
+
+## Rotas
+
+- `GET /checkout?productId=cartela_de_eventos&deviceId=...`: pagina de compra aberta pelo app.
+- `POST /create-payment`: cria a preferencia do Mercado Pago a partir do formulario.
+- `POST /webhook/mercadopago`: recebe notificacoes de pagamento aprovado.
+- `GET /entitlement?deviceId=...&productId=cartela_de_eventos`: consulta se a Cartela de eventos esta ativa.
+
+O app nao precisa carregar chave secreta. Nome e CPF ficam no fluxo do Worker/Mercado Pago; o app envia apenas o `deviceId` pseudonimo e consulta a liberacao.

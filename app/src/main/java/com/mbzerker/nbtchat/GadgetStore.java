@@ -11,6 +11,8 @@ import java.util.List;
 
 public final class GadgetStore {
     public static final String TABLE_100_ID = "table100";
+    public static final String TABLE_100_TITLE = "Cartela de eventos";
+    public static final String TABLE_100_FOOTER = "Produto destinado exclusivamente para organizacao de eventos familiares, recreativos e chas beneficentes.";
     public static final String ACTION_GADGETS_CHANGED = "com.mbzerker.nbtchat.GADGETS_CHANGED";
     public static final String EXTRA_TABLE_ID = "tableId";
     private static final String PREFS = "official_gadgets";
@@ -21,7 +23,11 @@ public final class GadgetStore {
     private static final String KEY_TABLE_100_OWNER_CONTACT = "table100_owner_contact";
     private static final String KEY_TABLE_100_INSTANCE = "table100_instance";
     private static final String KEY_TABLE_100_CHOICES = "table100_choices";
+    private static final String KEY_TABLE_100_PENDING_URL = "table100_pending_url";
+    private static final String KEY_TABLE_100_PENDING_DEVICE = "table100_pending_device";
+    private static final String KEY_TABLE_100_PENDING_AT = "table100_pending_at";
     private static final long WEEK_MS = 7L * 24L * 60L * 60L * 1000L;
+    private static final long PENDING_PAYMENT_TTL_MS = 24L * 60L * 60L * 1000L;
 
     private final EncryptedPrefs prefs;
 
@@ -38,9 +44,55 @@ public final class GadgetStore {
     }
 
     public void buyTable100() {
+        activateTable100Until(System.currentTimeMillis() + WEEK_MS);
+    }
+
+    public void activateTable100Until(long expiresAt) {
+        if (expiresAt <= System.currentTimeMillis()) {
+            return;
+        }
+        String instance = prefs.getString(KEY_TABLE_100_INSTANCE, "");
+        EncryptedPrefs.Editor editor = prefs.edit()
+                .putLong(KEY_TABLE_100_UNTIL, expiresAt);
+        if (instance == null || instance.trim().isEmpty()) {
+            editor.putString(KEY_TABLE_100_INSTANCE, "cartela-" + Long.toHexString(System.currentTimeMillis()));
+        }
+        editor.apply();
+    }
+
+    public void savePendingTable100Payment(String checkoutUrl, String deviceId) {
+        if (checkoutUrl == null || checkoutUrl.trim().isEmpty() || deviceId == null || deviceId.trim().isEmpty()) {
+            return;
+        }
         prefs.edit()
-                .putLong(KEY_TABLE_100_UNTIL, System.currentTimeMillis() + WEEK_MS)
-                .putString(KEY_TABLE_100_INSTANCE, "table100-" + Long.toHexString(System.currentTimeMillis()))
+                .putString(KEY_TABLE_100_PENDING_URL, checkoutUrl.trim())
+                .putString(KEY_TABLE_100_PENDING_DEVICE, deviceId.trim())
+                .putLong(KEY_TABLE_100_PENDING_AT, System.currentTimeMillis())
+                .apply();
+    }
+
+    public boolean hasPendingTable100Payment() {
+        long startedAt = prefs.getLong(KEY_TABLE_100_PENDING_AT, 0L);
+        return !pendingTable100CheckoutUrl().isEmpty()
+                && startedAt > 0L
+                && System.currentTimeMillis() - startedAt < PENDING_PAYMENT_TTL_MS;
+    }
+
+    public String pendingTable100CheckoutUrl() {
+        String url = prefs.getString(KEY_TABLE_100_PENDING_URL, "");
+        return url == null ? "" : url.trim();
+    }
+
+    public String pendingTable100DeviceId() {
+        String deviceId = prefs.getString(KEY_TABLE_100_PENDING_DEVICE, "");
+        return deviceId == null ? "" : deviceId.trim();
+    }
+
+    public void clearPendingTable100Payment() {
+        prefs.edit()
+                .putString(KEY_TABLE_100_PENDING_URL, "")
+                .putString(KEY_TABLE_100_PENDING_DEVICE, "")
+                .putLong(KEY_TABLE_100_PENDING_AT, 0L)
                 .apply();
     }
 

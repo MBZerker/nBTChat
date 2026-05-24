@@ -161,6 +161,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private IdentityStore identityStore;
     private MessageStore messageStore;
     private GadgetStore gadgetStore;
+    private StorePaymentClient storePaymentClient;
     private ThemeStore themeStore;
     private AppSettingsStore settingsStore;
     private BtChatManager btChatManager;
@@ -202,6 +203,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private TextView chatSubtitleText;
     private ImageView chatConnectionIcon;
     private boolean messageReceiverRegistered;
+    private boolean cartelaSyncInProgress;
     private boolean updateAvailable;
     private String updateVersionName = "";
     private String updatePageUrl = DOWNLOAD_PAGE_URL;
@@ -252,6 +254,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         identityStore = new IdentityStore(this);
         messageStore = new MessageStore(this);
         gadgetStore = new GadgetStore(this);
+        storePaymentClient = new StorePaymentClient();
         themeStore = new ThemeStore(this);
         settingsStore = new AppSettingsStore(this);
         darkMode = themeStore.isDarkMode();
@@ -290,6 +293,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         setIntent(intent);
         openChatFromIntent(intent);
         handleSharedImageIntent(intent);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (gadgetStore != null && gadgetStore.hasPendingTable100Payment()) {
+            syncCartelaEntitlement(false);
+        }
     }
 
     @Override
@@ -1948,13 +1959,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         if (!gadgetStore.hasTable100()) {
-            Toast.makeText(this, "Compre a Tabela 100 na loja para enviar.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Compre a Cartela de eventos na loja para enviar.", Toast.LENGTH_LONG).show();
             showStoreScreen();
             return;
         }
         GadgetStore.Table100Payload payload = table100PayloadWithKnownLocks(gadgetStore.table100Payload());
         if (payload.copyText.trim().isEmpty()) {
-            Toast.makeText(this, "Configure a Tabela 100 antes de enviar.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Configure a Cartela de eventos antes de enviar.", Toast.LENGTH_LONG).show();
             showTable100ConfigScreen();
             return;
         }
@@ -1963,7 +1974,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String id = messageStore.createId();
         messageStore.addMessage(address, id, MessageStore.KIND_TABLE_100, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
         sendOrQueueOutgoing(address, id, MessageStore.KIND_TABLE_100, body, "", 0L, sentAt);
-        Toast.makeText(this, "Tabela 100 enviada.", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Cartela de eventos enviada.", Toast.LENGTH_SHORT).show();
         if ("home".equals(currentScreen)) {
             renderContactList();
         }
@@ -2033,7 +2044,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         header.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
         LinearLayout texts = vertical();
-        TextView name = text("Tabela 100", 19, primary(), Typeface.BOLD);
+        TextView name = text(GadgetStore.TABLE_100_TITLE, 19, primary(), Typeface.BOLD);
         texts.addView(name);
         TextView description = text("100 numeros interativos para enviar em uma conversa.", 13, secondary(), Typeface.NORMAL);
         description.setLineSpacing(dp(2), 1f);
@@ -2059,19 +2070,94 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             options.setOnClickListener(v -> showTable100OptionsDialog());
             item.addView(options, topMargin(dp(12)));
             item.setOnClickListener(v -> showTable100OptionsDialog());
+        } else if (gadgetStore.hasPendingTable100Payment()) {
+            TextView pending = text("Pagamento em andamento. Ao concluir, volte ao app e toque em verificar.", 13, secondary(), Typeface.BOLD);
+            item.addView(pending, topMargin(dp(14)));
+            LinearLayout actions = horizontal();
+            actions.setGravity(Gravity.CENTER_VERTICAL);
+            Button resume = pillButton("Abrir pagamento", surfaceAlt(), primary());
+            resume.setOnClickListener(v -> openPendingCartelaPayment());
+            actions.addView(resume, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            Button check = pillButton("Verificar", "#16A34A", "#FFFFFF");
+            check.setOnClickListener(v -> syncCartelaEntitlement(true));
+            LinearLayout.LayoutParams checkParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+            checkParams.setMargins(dp(8), 0, 0, 0);
+            actions.addView(check, checkParams);
+            item.addView(actions, topMargin(dp(12)));
         } else {
-            TextView price = text("Teste: uso liberado por 7 dias.", 13, secondary(), Typeface.BOLD);
+            TextView price = text("R$ 4,99 - acesso por 7 dias.", 13, secondary(), Typeface.BOLD);
             item.addView(price, topMargin(dp(14)));
-            Button buy = pillButton("Comprar teste", "#16A34A", "#FFFFFF");
-            buy.setOnClickListener(v -> {
-                gadgetStore.buyTable100();
-                Toast.makeText(this, "Tabela 100 liberada por 7 dias.", Toast.LENGTH_SHORT).show();
-                showTable100ConfigScreen();
-            });
+            TextView footer = text(GadgetStore.TABLE_100_FOOTER, 12, secondary(), Typeface.NORMAL);
+            footer.setLineSpacing(dp(2), 1f);
+            item.addView(footer, topMargin(dp(8)));
+            Button buy = pillButton("Comprar", "#16A34A", "#FFFFFF");
+            buy.setOnClickListener(v -> startCartelaPurchase());
             item.addView(buy, topMargin(dp(12)));
             item.setOnClickListener(v -> buy.performClick());
         }
         return item;
+    }
+
+    private void startCartelaPurchase() {
+        String deviceId = StoreDeviceId.get(this);
+        Uri checkoutUri = storePaymentClient.cartelaCheckoutUri(deviceId);
+        gadgetStore.savePendingTable100Payment(checkoutUri.toString(), deviceId);
+        openExternalLink(checkoutUri);
+        Toast.makeText(this, "Conclua o pagamento e volte ao nBTChat.", Toast.LENGTH_LONG).show();
+        showStoreScreen();
+    }
+
+    private void openPendingCartelaPayment() {
+        String url = gadgetStore.pendingTable100CheckoutUrl();
+        if (url.isEmpty()) {
+            startCartelaPurchase();
+            return;
+        }
+        openExternalLink(Uri.parse(url));
+    }
+
+    private void syncCartelaEntitlement(boolean showFeedback) {
+        if (cartelaSyncInProgress || storePaymentClient == null || gadgetStore == null) {
+            return;
+        }
+        cartelaSyncInProgress = true;
+        String deviceId = gadgetStore.pendingTable100DeviceId();
+        if (deviceId.isEmpty()) {
+            deviceId = StoreDeviceId.get(this);
+        }
+        String finalDeviceId = deviceId;
+        new Thread(() -> {
+            try {
+                StorePaymentClient.Entitlement entitlement = storePaymentClient.getCartelaEntitlement(finalDeviceId);
+                runOnUiThread(() -> {
+                    cartelaSyncInProgress = false;
+                    if (entitlement.active && entitlement.expiresAt > System.currentTimeMillis()) {
+                        gadgetStore.activateTable100Until(entitlement.expiresAt);
+                        gadgetStore.clearPendingTable100Payment();
+                        Toast.makeText(this, "Cartela de eventos liberada.", Toast.LENGTH_LONG).show();
+                        showTable100ConfigScreen();
+                    } else if (showFeedback) {
+                        Toast.makeText(this, "Pagamento ainda nao confirmado.", Toast.LENGTH_LONG).show();
+                    }
+                    if ("store".equals(currentScreen)) {
+                        showStoreScreen();
+                    }
+                });
+            } catch (Exception ex) {
+                String message = ex.getMessage() == null || ex.getMessage().trim().isEmpty()
+                        ? "Nao foi possivel verificar o pagamento."
+                        : ex.getMessage();
+                runOnUiThread(() -> {
+                    cartelaSyncInProgress = false;
+                    if (showFeedback) {
+                        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                    }
+                    if ("store".equals(currentScreen)) {
+                        showStoreScreen();
+                    }
+                });
+            }
+        }, "nBTChat-store-sync").start();
     }
 
     private void showTable100OptionsDialog() {
@@ -2080,7 +2166,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         actions.add("Configurar");
         actions.add("Compartilhar");
         new AlertDialog.Builder(this)
-                .setTitle("Tabela 100")
+                .setTitle(GadgetStore.TABLE_100_TITLE)
                 .setItems(actions.toArray(new String[0]), (dialog, which) -> {
                     String action = actions.get(which);
                     if ("Abrir".equals(action)) {
@@ -2096,11 +2182,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private void showTable100ShareChooser() {
         if (!gadgetStore.hasTable100()) {
-            Toast.makeText(this, "Compre a Tabela 100 antes de compartilhar.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Compre a Cartela de eventos antes de compartilhar.", Toast.LENGTH_LONG).show();
             return;
         }
         if (gadgetStore.table100CopyText().trim().isEmpty()) {
-            Toast.makeText(this, "Configure a Tabela 100 antes de compartilhar.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Configure a Cartela de eventos antes de compartilhar.", Toast.LENGTH_LONG).show();
             showTable100ConfigScreen();
             return;
         }
@@ -2120,7 +2206,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         new AlertDialog.Builder(this)
-                .setTitle("Compartilhar Tabela 100")
+                .setTitle("Compartilhar " + GadgetStore.TABLE_100_TITLE)
                 .setItems(names.toArray(new String[0]), (dialog, which) -> sendTable100ToAddress(addresses.get(which)))
                 .show();
     }
@@ -2136,7 +2222,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout top = horizontal();
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showStoreScreen()));
-        TextView title = text("Tabela 100", 25, primary(), Typeface.BOLD);
+        TextView title = text(GadgetStore.TABLE_100_TITLE, 25, primary(), Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
@@ -2175,7 +2261,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         save.setOnClickListener(v -> {
             gadgetStore.saveTable100Texts(messageInput.getText().toString(), copyInput.getText().toString(), contactInput.getText().toString());
             hideKeyboard(contactInput);
-            Toast.makeText(this, "Tabela 100 salva.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Cartela de eventos salva.", Toast.LENGTH_SHORT).show();
             showStoreScreen();
         });
         root.addView(save, topMargin(dp(16)));
@@ -2208,7 +2294,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 showStoreScreen();
             }
         }));
-        TextView title = text("Tabela 100", 26, primary(), Typeface.BOLD);
+        TextView title = text(GadgetStore.TABLE_100_TITLE, 26, primary(), Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
@@ -2226,6 +2312,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         board.setBackground(rounded(darkMode ? "#101C18" : "#F0FBF4", dp(14), "#16A34A"));
         board.addView(table100Grid(payload, false, true, owner));
         root.addView(board, topMargin(dp(18)));
+
+        TextView footer = text(GadgetStore.TABLE_100_FOOTER, 12, secondary(), Typeface.NORMAL);
+        footer.setGravity(Gravity.CENTER);
+        footer.setLineSpacing(dp(2), 1f);
+        root.addView(footer, topMargin(dp(10)));
 
         if (owner) {
             root.addView(table100OwnerChoices(payload), topMargin(dp(18)));
@@ -2853,7 +2944,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
 
         if (MessageStore.KIND_TABLE_100.equals(kind)) {
-            TextView title = text("Tabela 100", 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
+            TextView title = text(GadgetStore.TABLE_100_TITLE, 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
             title.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_table_24, 0, 0, 0);
             title.setCompoundDrawablePadding(dp(8));
             bubble.addView(title);
@@ -4234,7 +4325,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return message.mine ? "Voce enviou uma mensagem de voz" : "Mensagem de voz";
         }
         if (MessageStore.KIND_TABLE_100.equals(message.kind)) {
-            return message.mine ? "Voce enviou uma tabela 100" : "Tabela 100";
+            return message.mine ? "Voce enviou uma cartela de eventos" : GadgetStore.TABLE_100_TITLE;
         }
         if (MessageStore.KIND_CONTACT_INVITE.equals(message.kind)) {
             return message.mine ? "Voce enviou um contato" : "Contato nBTChat";
