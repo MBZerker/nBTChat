@@ -8,18 +8,189 @@ const PRODUCTS = {
   },
 };
 
+async function getProducts(env) {
+  const defaults = JSON.parse(JSON.stringify(PRODUCTS));
+  try {
+    const raw = await env.STORE.get("config:products");
+    if (!raw) {
+      return defaults;
+    }
+    const saved = JSON.parse(raw);
+    for (const [id, product] of Object.entries(defaults)) {
+      const custom = saved && saved[id] ? saved[id] : {};
+      defaults[id] = normalizeProduct({ ...product, ...custom }, product);
+    }
+  } catch (_) {
+  }
+  return defaults;
+}
+
+async function getProduct(env, productId) {
+  const products = await getProducts(env);
+  return products[productId] || null;
+}
+
+function normalizeProduct(product, fallback) {
+  const base = fallback || PRODUCTS.cartela_de_eventos;
+  return {
+    id: clean(product.id || base.id),
+    title: clean(product.title || base.title),
+    price: Math.max(0.01, Number(product.price) || base.price),
+    durationDays: clampInt(product.durationDays, base.durationDays, 1, 365),
+    footer: clean(product.footer || base.footer),
+  };
+}
+
+function adminKey(env) {
+  return clean(env.NBTCHAT_ADMIN_KEY || env.ADMIN_API_KEY || env.API_KEY || "");
+}
+
+async function adminSessionValue(env) {
+  const key = adminKey(env);
+  return key ? await sha256(`nbtchat-admin:${key}`) : "";
+}
+
+function cookieValue(request, name) {
+  const raw = request.headers.get("cookie") || "";
+  for (const part of raw.split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key === name) {
+      return value.join("=");
+    }
+  }
+  return "";
+}
+
+async function isAdminRequest(request, env) {
+  const expected = await adminSessionValue(env);
+  return !!expected && cookieValue(request, "nbtchat_admin") === expected;
+}
+
+async function adminLogin(request, env) {
+  const data = await readBody(request);
+  const expected = adminKey(env);
+  const provided = clean(data.key);
+  if (!expected || provided !== expected) {
+    return resultHtml("Acesso negado", "Chave ADM ausente ou inválida.", false, 403);
+  }
+  const session = await adminSessionValue(env);
+  return html("<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0; url=/admin\"><p>Entrando...</p>", 303, {
+    "set-cookie": `nbtchat_admin=${session}; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=7200`,
+    location: "/admin",
+  });
+}
+
+async function adminPage(request, env) {
+  const authenticated = await isAdminRequest(request, env);
+  const products = await getProducts(env);
+  const product = products.cartela_de_eventos;
+  return html(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ADM nBTChat Store</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Arial, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f4f7f5; color: #17212b; display: grid; place-items: center; }
+    main { width: min(94vw, 720px); background: white; border: 1px solid #d7ddd8; border-radius: 18px; padding: 24px; box-shadow: 0 16px 50px #0002; }
+    h1 { margin: 0 0 6px; font-size: 28px; }
+    p { color: #52606d; line-height: 1.45; }
+    label { display: block; font-size: 13px; font-weight: 800; margin-top: 14px; }
+    input, textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5cf; border-radius: 12px; padding: 13px; font-size: 16px; margin-top: 6px; }
+    textarea { min-height: 92px; resize: vertical; }
+    button { border: 0; border-radius: 14px; padding: 14px 18px; margin-top: 18px; background: #16a34a; color: white; font-weight: 900; font-size: 16px; }
+    .locked { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; padding: 12px; border-radius: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 160px 160px; gap: 12px; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+    @media (prefers-color-scheme: dark) {
+      body { background: #101820; color: #f7f8f5; }
+      main { background: #18232c; border-color: #2f3b45; }
+      input, textarea { background: #24313b; border-color: #2f3b45; color: #f7f8f5; }
+      .locked { background: #3a2615; border-color: #9a5a1f; color: #fed7aa; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ADM nBTChat Store</h1>
+    <p>Configure os itens oficiais da loja. A chave ADM fica apenas no envio do login e depois a sessão usa cookie seguro.</p>
+    ${authenticated ? adminProductsForm(product) : adminLoginForm()}
+  </main>
+</body>
+</html>`);
+}
+
+function adminLoginForm() {
+  return `<div class="locked">Entre com a chave ADM configurada nas variáveis do Worker.</div>
+    <form method="post" action="/admin/login">
+      <label>Chave ADM</label>
+      <input name="key" type="password" autocomplete="current-password" required>
+      <button type="submit">Entrar</button>
+    </form>`;
+}
+
+function adminProductsForm(product) {
+  return `<form method="post" action="/admin/products">
+      <input type="hidden" name="id" value="${escapeHtml(product.id)}">
+      <label>Nome do item</label>
+      <input name="title" value="${escapeHtml(product.title)}" required maxlength="80">
+      <div class="grid">
+        <div>
+          <label>Preço em R$</label>
+          <input name="price" value="${escapeHtml(String(product.price.toFixed(2)).replace(".", ","))}" required inputmode="decimal">
+        </div>
+        <div>
+          <label>Dias de uso</label>
+          <input name="durationDays" value="${escapeHtml(String(product.durationDays))}" required inputmode="numeric">
+        </div>
+      </div>
+      <label>Rodapé/observação</label>
+      <textarea name="footer" required>${escapeHtml(product.footer)}</textarea>
+      <button type="submit">Salvar item</button>
+    </form>`;
+}
+
+async function saveAdminProducts(request, env) {
+  if (!(await isAdminRequest(request, env))) {
+    return resultHtml("Acesso negado", "Faça login na área ADM para salvar.", false, 403);
+  }
+  const data = await readBody(request);
+  const products = await getProducts(env);
+  const id = clean(data.id || "cartela_de_eventos");
+  const fallback = products[id] || PRODUCTS[id] || PRODUCTS.cartela_de_eventos;
+  products[id] = normalizeProduct({
+    id,
+    title: data.title,
+    price: decimalNumber(data.price),
+    durationDays: data.durationDays,
+    footer: data.footer,
+  }, fallback);
+  await env.STORE.put("config:products", JSON.stringify(products));
+  return resultHtml("Item salvo", "As configurações da loja foram atualizadas.", true);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
       if (request.method === "GET" && url.pathname === "/") {
-        return json({ ok: true, products: PRODUCTS });
+        return json({ ok: true, products: await getProducts(env) });
+      }
+      if (request.method === "GET" && url.pathname === "/admin") {
+        return adminPage(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/admin/login") {
+        return adminLogin(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/admin/products") {
+        return saveAdminProducts(request, env);
       }
       if (request.method === "GET" && url.pathname === "/checkout") {
-        return checkoutPage(url);
+        return checkoutPage(url, env);
       }
       if (request.method === "GET" && url.pathname === "/recover") {
-        return recoverPage(url);
+        return recoverPage(url, env);
       }
       if (request.method === "POST" && url.pathname === "/create-payment") {
         return createPayment(request, env, url);
@@ -60,7 +231,7 @@ export default {
 
 async function createPayment(request, env, url) {
   const data = await readBody(request);
-  const product = PRODUCTS[data.productId || "cartela_de_eventos"];
+  const product = await getProduct(env, data.productId || "cartela_de_eventos");
   if (!product) {
     return json({ error: "invalid_product" }, 400);
   }
@@ -165,7 +336,7 @@ async function mercadoPagoWebhook(request, env, url) {
 async function activateApprovedPayment(env, payment, paymentId) {
   const externalReference = clean(payment.external_reference);
   const productId = externalReference.split(":")[1] || "";
-  const product = PRODUCTS[productId];
+  const product = await getProduct(env, productId);
   if (!product) {
     return { activated: false, skipped: "product_not_found" };
   }
@@ -240,7 +411,7 @@ async function writeEntitlement(env, deviceId, product, record) {
 
 async function recoverPurchase(request, env) {
   const data = await readBody(request);
-  const product = PRODUCTS[data.productId || "cartela_de_eventos"];
+  const product = await getProduct(env, data.productId || "cartela_de_eventos");
   const deviceId = clean(data.deviceId);
   const normalizedRecoveryCode = normalizeRecoveryCode(data.recoveryCode);
   const recoveryCodeHash = normalizedRecoveryCode ? await sha256(normalizedRecoveryCode) : "";
@@ -283,7 +454,7 @@ async function entitlement(env, url) {
   return json({
     active: true,
     productId,
-    title: record.title || PRODUCTS[productId]?.title || productId,
+    title: record.title || (await getProduct(env, productId))?.title || productId,
     expiresAt: record.expiresAt,
   });
 }
@@ -492,10 +663,10 @@ function cleanupExpiredChoices(cartela) {
   });
 }
 
-function checkoutPage(url) {
+async function checkoutPage(url, env) {
   const productId = clean(url.searchParams.get("productId") || "cartela_de_eventos");
   const deviceId = clean(url.searchParams.get("deviceId"));
-  const product = PRODUCTS[productId] || PRODUCTS.cartela_de_eventos;
+  const product = await getProduct(env, productId) || (await getProduct(env, "cartela_de_eventos"));
   if (!deviceId) {
     return html("<h1>nBTChat Loja</h1><p>Abra esta tela pelo app para comprar.</p>");
   }
@@ -607,10 +778,10 @@ function recoveryCodePage(product, recoveryCode, checkoutUrl) {
 </html>`);
 }
 
-function recoverPage(url) {
+async function recoverPage(url, env) {
   const productId = clean(url.searchParams.get("productId") || "cartela_de_eventos");
   const deviceId = clean(url.searchParams.get("deviceId"));
-  const product = PRODUCTS[productId] || PRODUCTS.cartela_de_eventos;
+  const product = await getProduct(env, productId) || (await getProduct(env, "cartela_de_eventos"));
   if (!deviceId) {
     return html("<h1>nBTChat Loja</h1><p>Abra esta tela pelo app para recuperar.</p>");
   }
@@ -658,9 +829,9 @@ function recoverPage(url) {
 </html>`);
 }
 
-function resultHtml(title, body, ok) {
+function resultHtml(title, body, ok, status = 200) {
   const color = ok ? "#16a34a" : "#dc2626";
-  return html(`<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:32px;max-width:520px;margin:auto;line-height:1.45}h1{color:${color}}</style><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p>`);
+  return html(`<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:32px;max-width:520px;margin:auto;line-height:1.45}h1{color:${color}}</style><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p>`, status);
 }
 
 async function resultPage(path, env, url) {
@@ -725,10 +896,10 @@ function json(value, status = 200) {
   });
 }
 
-function html(value, status = 200) {
+function html(value, status = 200, extraHeaders = {}) {
   return new Response(value, {
     status,
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers: { "content-type": "text/html; charset=utf-8", ...extraHeaders },
   });
 }
 
@@ -742,6 +913,11 @@ function clampInt(value, fallback, min, max) {
     return fallback;
   }
   return Math.max(min, Math.min(max, parsed));
+}
+
+function decimalNumber(value) {
+  const parsed = Number.parseFloat(String(value || "").replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function onlyDigits(value) {

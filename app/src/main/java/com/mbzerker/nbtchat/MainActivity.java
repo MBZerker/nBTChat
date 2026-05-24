@@ -123,6 +123,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_PICK_NOTIFICATION_SOUND = 108;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND_FILE = 109;
     private static final int REQUEST_RESTORE_BACKUP = 110;
+    private static final int TERMS_VERSION = 1;
     private static final int MAX_GIF_BYTES = 640 * 1024;
     private static final int PROFILE_IMAGE_MAX_SIDE = 256;
     private static final int CHAT_IMAGE_MAX_SIDE = 960;
@@ -208,6 +209,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private boolean messageReceiverRegistered;
     private boolean cartelaSyncInProgress;
     private boolean cartelaOnlineSyncInProgress;
+    private boolean bluetoothEnablePromptShown;
     private boolean updateAvailable;
     private String updateVersionName = "";
     private String updatePageUrl = DOWNLOAD_PAGE_URL;
@@ -273,9 +275,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         applySystemBars();
         checkForUpdates(false);
 
-        if (!settingsStore.termsAccepted()) {
+        if (!settingsStore.termsAccepted(TERMS_VERSION) && !profileStore.hasLocalProfile()) {
             showTermsScreen();
             return;
+        } else if (!settingsStore.termsAccepted(TERMS_VERSION) && profileStore.hasLocalProfile()) {
+            settingsStore.setTermsAcceptedVersion(TERMS_VERSION);
         } else if (profileStore.hasLocalProfile()) {
             showInitialScreen();
         } else {
@@ -312,7 +316,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         Button accept = pillButton("Aceitar e continuar", "#16A34A", "#FFFFFF");
         accept.setOnClickListener(v -> {
-            settingsStore.setTermsAccepted(true);
+            settingsStore.setTermsAcceptedVersion(TERMS_VERSION);
             if (profileStore.hasLocalProfile()) {
                 showInitialScreen();
             } else {
@@ -338,12 +342,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private String termsOfUseText() {
-        return "O nBTChat e um aplicativo livre de comunicacao local por Bluetooth. Ele foi criado para conversas privadas entre pessoas proximas e para gadgets oficiais dentro do proprio app.\n\n"
-                + "O app respeita as leis brasileiras. Voce se compromete a nao usar o nBTChat para fraude, abuso, assedio, jogos de azar, sorteios, distribuicao de premios, promocoes comerciais ou qualquer atividade que exija autorizacao legal sem cumprir essa exigencia.\n\n"
-                + "As conversas nao sao salvas em servidor do nBTChat. Elas ficam no aparelho e sao protegidas por criptografia de ponta a ponta no envio e por armazenamento local criptografado quando o app precisa guardar historico, midias, perfil, contatos, backups e configuracoes.\n\n"
-                + "A loja pode armazenar dados minimos para liberar compras e recuperacao, como identificador do aparelho, produto, validade, nome, CPF com protecao por hash, ultimos digitos do CPF, codigo de recuperacao e estado da Cartela de eventos. Pagamentos sao processados pelo Mercado Pago.\n\n"
-                + "A Cartela de eventos e uma ferramenta de organizacao. O organizador e responsavel pela finalidade do uso, pelos textos configurados, pelos contatos exibidos e pela conformidade com as regras aplicaveis ao evento.\n\n"
-                + "Ao continuar, voce entende que o Bluetooth depende do aparelho, permissao do sistema e distancia fisica, e que backups, restauracoes e sincronizacao pela internet podem depender de servicos externos.";
+        return "O nBTChat é um aplicativo livre de comunicação local por Bluetooth. Ele foi criado para conversas privadas entre pessoas próximas e para recursos oficiais usados dentro do próprio app.\n\n"
+                + "O app respeita as leis brasileiras. Você se compromete a não usar o nBTChat para fraude, abuso, assédio, jogos de azar, sorteios, distribuição de prêmios, promoções comerciais ou qualquer atividade que exija autorização legal sem cumprir essa exigência.\n\n"
+                + "As conversas não são salvas em servidor do nBTChat. Elas ficam no aparelho. O envio, o histórico local, as mídias, o perfil, os contatos, backups e configurações usam proteções técnicas adequadas ao funcionamento do app.\n\n"
+                + "A loja pode armazenar dados mínimos para liberar compras e recuperação, como identificador do aparelho, produto, validade, nome, CPF protegido, últimos dígitos do CPF, código de recuperação e estado dos itens oficiais. Pagamentos são processados pelo Mercado Pago.\n\n"
+                + "Os itens oficiais da loja são ferramentas de organização e interação. O organizador é responsável pela finalidade do uso, pelos textos configurados, pelos contatos exibidos e pela conformidade com as regras aplicáveis.\n\n"
+                + "Ao continuar, você entende que o Bluetooth depende do aparelho, permissão do sistema e distância física, e que backups, restaurações e sincronização pela internet podem depender de serviços externos.";
     }
 
     @Override
@@ -605,13 +609,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         if (!btChatManager.isBluetoothEnabled()) {
-            try {
-                startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), REQUEST_ENABLE_BT);
-            } catch (SecurityException ex) {
-                showState("Libere a permissao Bluetooth nas configuracoes do app.");
+            if (!bluetoothEnablePromptShown) {
+                bluetoothEnablePromptShown = true;
+                try {
+                    startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), REQUEST_ENABLE_BT);
+                } catch (SecurityException ex) {
+                    showState("Libere a permissão Bluetooth nas configurações do app.");
+                }
             }
             return;
         }
+        bluetoothEnablePromptShown = false;
         startOnlineService();
         if ("scanner".equals(currentScreen) && discoveredDevices.isEmpty()) {
             btChatManager.startNearbyDiscovery();
@@ -2584,9 +2592,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         setContentView(scrollView);
         requestInsets(root);
-        if (owner) {
-            registerCartelaOnline(false);
-        }
         syncCartelaOnline(payload, false);
     }
 

@@ -14,7 +14,7 @@ public final class AppSettingsStore {
     private static final String KEY_VOICE_OUTPUT = "voice_output";
     private static final String KEY_USER_PRESENCE = "user_presence";
     private static final String KEY_CONTACT_SHARING_ENABLED = "contact_sharing_enabled";
-    private static final String KEY_TERMS_ACCEPTED = "terms_accepted";
+    private static final String KEY_TERMS_VERSION = "terms_version";
     public static final String VOICE_OUTPUT_PHONE = "phone";
     public static final String VOICE_OUTPUT_BLUETOOTH = "bluetooth";
     public static final String PRESENCE_ONLINE = "online";
@@ -91,12 +91,16 @@ public final class AppSettingsStore {
         prefs.edit().putBoolean(KEY_CONTACT_SHARING_ENABLED, enabled).apply();
     }
 
-    public boolean termsAccepted() {
-        return prefs.getBoolean(KEY_TERMS_ACCEPTED, false);
+    public int termsVersion() {
+        return (int) prefs.getLong(KEY_TERMS_VERSION, 0L);
     }
 
-    public void setTermsAccepted(boolean accepted) {
-        prefs.edit().putBoolean(KEY_TERMS_ACCEPTED, accepted).apply();
+    public boolean termsAccepted(int currentVersion) {
+        return termsVersion() >= currentVersion;
+    }
+
+    public void setTermsAcceptedVersion(int version) {
+        prefs.edit().putLong(KEY_TERMS_VERSION, Math.max(0, version)).apply();
     }
 
     public boolean shouldPromptNearbyScan(int contactCount) {

@@ -6,6 +6,7 @@ Worker publico usado pela loja do nBTChat.
 
 - `MP_ACCESS_TOKEN`: secret do Mercado Pago. Use teste enquanto estiver no ambiente de teste e producao quando publicar de verdade.
 - `STORE`: binding do Workers KV apontando para o namespace `NBTCHAT_STORE`.
+- `NBTCHAT_ADMIN_KEY` ou `ADMIN_API_KEY` ou `API_KEY`: chave para entrar na area ADM em `/admin`.
 
 ## Rotas
 
@@ -19,5 +20,7 @@ Worker publico usado pela loja do nBTChat.
 - `POST /cartela/choose`: marca um numero como escolhido, impedindo duplicidade.
 - `POST /cartela/confirm`: dono confirma ou remove confirmacao de uma escolha.
 - `POST /cartela/delete-choice`: dono remove um participante e libera o numero.
+- `GET /admin`: area ADM para configurar itens oficiais da loja.
+- `POST /admin/login` e `POST /admin/products`: login e salvamento da area ADM.
 
 O app nao precisa carregar chave secreta. Nome e CPF ficam no fluxo do Worker/Mercado Pago; o app envia apenas o `deviceId` pseudonimo e consulta a liberacao. O codigo de recuperacao e mostrado antes do pagamento e deve ser guardado pelo comprador.
