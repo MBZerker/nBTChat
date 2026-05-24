@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -263,6 +264,41 @@ public final class BtChatManager {
         } catch (SecurityException ignored) {
         }
         return null;
+    }
+
+    @SuppressLint("MissingPermission")
+    public Map<String, DeviceCandidate> pairedCandidatesByAddress() {
+        Map<String, DeviceCandidate> candidates = new LinkedHashMap<>();
+        if (adapter == null) {
+            return candidates;
+        }
+        try {
+            Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
+            if (bondedDevices == null) {
+                return candidates;
+            }
+            for (BluetoothDevice device : bondedDevices) {
+                String address = safeAddress(device);
+                if (!address.isEmpty()) {
+                    candidates.put(address, new DeviceCandidate(device, safeName(device), address, true, true));
+                }
+            }
+        } catch (SecurityException ignored) {
+        }
+        return candidates;
+    }
+
+    @SuppressLint("MissingPermission")
+    public void stopDiscovery() {
+        if (adapter == null) {
+            return;
+        }
+        try {
+            if (adapter.isDiscovering()) {
+                adapter.cancelDiscovery();
+            }
+        } catch (SecurityException ignored) {
+        }
     }
 
     @SuppressLint("MissingPermission")

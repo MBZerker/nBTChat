@@ -18,8 +18,14 @@ export default {
       if (request.method === "GET" && url.pathname === "/checkout") {
         return checkoutPage(url);
       }
+      if (request.method === "GET" && url.pathname === "/recover") {
+        return recoverPage(url);
+      }
       if (request.method === "POST" && url.pathname === "/create-payment") {
         return createPayment(request, env, url);
+      }
+      if (request.method === "POST" && url.pathname === "/recover-purchase") {
+        return recoverPurchase(request, env);
       }
       if (request.method === "POST" && url.pathname === "/webhook/mercadopago") {
         return mercadoPagoWebhook(request, env, url);
@@ -155,8 +161,87 @@ async function mercadoPagoWebhook(request, env, url) {
     cpfLast4: pending.cpfLast4,
     updatedAt: Date.now(),
   }));
+  await env.STORE.put(`payment:${paymentId}:${product.id}`, JSON.stringify({
+    productId: product.id,
+    title: product.title,
+    paymentId: String(paymentId),
+    externalReference: payment.external_reference,
+    buyerName: pending.buyerName,
+    cpfHash: pending.cpfHash,
+    cpfLast4: pending.cpfLast4,
+    approvedAt: payment.date_approved || payment.date_created || new Date().toISOString(),
+    expiresAt,
+  }));
   await env.STORE.delete(`pending:${payment.external_reference}`);
   return json({ ok: true });
+}
+
+async function recoverPurchase(request, env) {
+  const data = await readBody(request);
+  const product = PRODUCTS[data.productId || "cartela_de_eventos"];
+  const deviceId = clean(data.deviceId);
+  const paymentId = onlyDigits(data.paymentId);
+  const buyerCpf = onlyDigits(data.buyerCpf);
+  if (!product || !deviceId || !paymentId || buyerCpf.length !== 11) {
+    return resultHtml("Dados incompletos", "Confira CPF e ID do pagamento e tente novamente.", false);
+  }
+
+  const cpfHash = await sha256(buyerCpf);
+  let paymentRecord = null;
+  const indexed = await env.STORE.get(`payment:${paymentId}:${product.id}`);
+  if (indexed) {
+    paymentRecord = JSON.parse(indexed);
+    if (paymentRecord.cpfHash !== cpfHash) {
+      return resultHtml("Nao foi possivel recuperar", "O CPF informado nao confere com esse pagamento.", false);
+    }
+  } else {
+    const mp = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+      headers: { Authorization: `Bearer ${env.MP_ACCESS_TOKEN}` },
+    });
+    if (!mp.ok) {
+      return resultHtml("Pagamento nao encontrado", "Confira o ID do pagamento no comprovante do Mercado Pago.", false);
+    }
+    const payment = await mp.json();
+    const paidCpf = onlyDigits(payment?.payer?.identification?.number);
+    if (payment.status !== "approved"
+        || !payment.external_reference
+        || !payment.external_reference.startsWith(`nbtchat:${product.id}:`)
+        || (paidCpf && paidCpf !== buyerCpf)) {
+      return resultHtml("Nao foi possivel recuperar", "Esse pagamento nao esta aprovado para este produto ou o CPF nao confere.", false);
+    }
+    const approvedAt = payment.date_approved || payment.date_created || new Date().toISOString();
+    const expiresAt = new Date(approvedAt).getTime() + product.durationDays * 24 * 60 * 60 * 1000;
+    paymentRecord = {
+      productId: product.id,
+      title: product.title,
+      paymentId: String(paymentId),
+      externalReference: payment.external_reference,
+      buyerName: clean(payment?.payer?.first_name || ""),
+      cpfHash,
+      cpfLast4: buyerCpf.slice(-4),
+      approvedAt,
+      expiresAt,
+    };
+    await env.STORE.put(`payment:${paymentId}:${product.id}`, JSON.stringify(paymentRecord));
+  }
+
+  if (!paymentRecord.expiresAt || paymentRecord.expiresAt <= Date.now()) {
+    return resultHtml("Compra expirada", "O periodo de uso dessa compra ja terminou.", false);
+  }
+
+  await env.STORE.put(`entitlement:${deviceId}:${product.id}`, JSON.stringify({
+    active: true,
+    productId: product.id,
+    title: product.title,
+    expiresAt: paymentRecord.expiresAt,
+    paymentId: String(paymentId),
+    externalReference: paymentRecord.externalReference || "",
+    buyerName: paymentRecord.buyerName || "",
+    cpfHash,
+    cpfLast4: buyerCpf.slice(-4),
+    recoveredAt: Date.now(),
+  }));
+  return resultHtml("Compra recuperada", "Volte ao nBTChat e toque em verificar para liberar a Cartela de eventos.", true);
 }
 
 async function entitlement(env, url) {
@@ -232,6 +317,62 @@ function checkoutPage(url) {
   </main>
 </body>
 </html>`);
+}
+
+function recoverPage(url) {
+  const productId = clean(url.searchParams.get("productId") || "cartela_de_eventos");
+  const deviceId = clean(url.searchParams.get("deviceId"));
+  const product = PRODUCTS[productId] || PRODUCTS.cartela_de_eventos;
+  if (!deviceId) {
+    return html("<h1>nBTChat Loja</h1><p>Abra esta tela pelo app para recuperar.</p>");
+  }
+  return html(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recuperar ${escapeHtml(product.title)} - nBTChat</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Arial, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f7f5; color: #17212b; }
+    main { width: min(92vw, 430px); background: white; border: 1px solid #d7ddd8; border-radius: 18px; padding: 24px; box-shadow: 0 16px 50px #0002; }
+    .badge { width: 68px; height: 68px; border-radius: 20px; display: grid; place-items: center; background: #ddf7e8; color: #16a34a; font-size: 34px; margin-bottom: 14px; }
+    h1 { margin: 0; font-size: 28px; }
+    p { line-height: 1.45; color: #52606d; }
+    label { display: block; font-size: 13px; font-weight: 700; margin-top: 14px; }
+    input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5cf; border-radius: 12px; padding: 13px; font-size: 16px; margin-top: 6px; }
+    button { width: 100%; border: 0; border-radius: 14px; padding: 14px; margin-top: 18px; background: #16a34a; color: white; font-weight: 800; font-size: 16px; }
+    .footer { font-size: 12px; color: #64748b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #101820; color: #f7f8f5; }
+      main { background: #18232c; border-color: #2f3b45; }
+      input { background: #24313b; border-color: #2f3b45; color: #f7f8f5; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="badge">#</div>
+    <h1>Recuperar compra</h1>
+    <p>Informe o CPF usado na compra e o ID do pagamento aprovado no Mercado Pago.</p>
+    <form method="post" action="/recover-purchase">
+      <input type="hidden" name="productId" value="${escapeHtml(product.id)}">
+      <input type="hidden" name="deviceId" value="${escapeHtml(deviceId)}">
+      <label>CPF</label>
+      <input name="buyerCpf" inputmode="numeric" autocomplete="off" required minlength="11" maxlength="14">
+      <label>ID do pagamento</label>
+      <input name="paymentId" inputmode="numeric" autocomplete="off" required minlength="5" maxlength="32">
+      <button type="submit">Recuperar ${escapeHtml(product.title)}</button>
+    </form>
+    <p class="footer">O ID do pagamento aparece no comprovante ou nos detalhes do pagamento no Mercado Pago.</p>
+  </main>
+</body>
+</html>`);
+}
+
+function resultHtml(title, body, ok) {
+  const color = ok ? "#16a34a" : "#dc2626";
+  return html(`<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:32px;max-width:520px;margin:auto;line-height:1.45}h1{color:${color}}</style><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p>`);
 }
 
 function resultPage(path) {

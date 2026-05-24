@@ -25,6 +25,10 @@ public final class StorePaymentClient {
         return Uri.parse(baseUrl + "/checkout?productId=" + PRODUCT_CARTELA_EVENTOS + "&deviceId=" + Uri.encode(deviceId));
     }
 
+    public Uri cartelaRecoveryUri(String deviceId) {
+        return Uri.parse(baseUrl + "/recover?productId=" + PRODUCT_CARTELA_EVENTOS + "&deviceId=" + Uri.encode(deviceId));
+    }
+
     public Entitlement getCartelaEntitlement(String deviceId) throws Exception {
         String path = "/entitlement?deviceId=" + enc(deviceId) + "&productId=" + enc(PRODUCT_CARTELA_EVENTOS);
         JSONObject json = request(path);

@@ -108,6 +108,13 @@ public final class NotificationHelper {
                 .build();
     }
 
+    public static void cancelBackgroundNotification(Context context) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.cancel(ONLINE_NOTIFICATION_ID);
+        }
+    }
+
     public static void showMessageNotification(Context context, String remoteAddress, String remoteName, String body, int unread) {
         AppSettingsStore settingsStore = new AppSettingsStore(context);
         if (!settingsStore.notificationsEnabled()) {

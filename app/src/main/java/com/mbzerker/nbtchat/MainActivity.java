@@ -260,6 +260,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         darkMode = themeStore.isDarkMode();
         btChatManager = new BtChatManager(this, this);
         NotificationHelper.ensureChannels(this);
+        NotificationHelper.cancelBackgroundNotification(this);
+        try {
+            stopService(new Intent(this, BluetoothForegroundService.class));
+        } catch (Exception ignored) {
+        }
         registerMessageReceiver();
         applySystemBars();
         checkForUpdates(false);
@@ -274,6 +279,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         openChatFromIntent(getIntent());
         handleSharedImageIntent(getIntent());
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (profileStore != null && profileStore.hasLocalProfile() && btChatManager != null && btChatManager.isBluetoothEnabled()) {
+            btChatManager.startListening();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        if (btChatManager != null && !isChangingConfigurations()) {
+            btChatManager.stopDiscovery();
+            btChatManager.stop();
+        }
+        super.onStop();
     }
 
     @Override
@@ -298,8 +320,26 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     @Override
     protected void onResume() {
         super.onResume();
+        if (profileStore != null && profileStore.hasLocalProfile()) {
+            tryStartBluetooth();
+        }
         if (gadgetStore != null && gadgetStore.hasPendingTable100Payment()) {
             syncCartelaEntitlement(false);
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if ("chat".equals(currentScreen)) {
+            leaveChatToHome();
+        } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen)) {
+            showHomeScreen();
+        } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen)) {
+            showStoreScreen();
+        } else if ("store".equals(currentScreen)) {
+            showUpdatesScreen();
+        } else {
+            super.onBackPressed();
         }
     }
 
@@ -446,25 +486,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!profileStore.hasLocalProfile()) {
             return;
         }
-        Intent serviceIntent = new Intent(this, BluetoothForegroundService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
-        }
+        btChatManager.startListening();
     }
 
     private void notifyProfileUpdated() {
         if (!profileStore.hasLocalProfile()) {
             return;
         }
-        Intent serviceIntent = new Intent(this, BluetoothForegroundService.class);
-        serviceIntent.setAction(BluetoothForegroundService.ACTION_PROFILE_UPDATED);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
-        }
+        btChatManager.sendProfileUpdate();
     }
 
     private void openChatFromIntent(Intent intent) {
@@ -531,6 +560,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showHomeScreen() {
+        if (btChatManager != null) {
+            btChatManager.stopDiscovery();
+        }
         int contactCount = conversationCount();
         if (contactCount == 0) {
             showNearbyScannerScreen(true);
@@ -621,6 +653,19 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             scanSuggestionShown = true;
             root.postDelayed(() -> suggestNearbyScan(contactCount), 250);
         }
+    }
+
+    private void leaveChatToHome() {
+        sendLocalTyping(false);
+        hideKeyboard(messageInput);
+        stopVoicePlayback(false);
+        receiptViews.clear();
+        voiceControls.clear();
+        renderedMessageIds.clear();
+        messageList = null;
+        messageScroll = null;
+        messageInput = null;
+        showHomeScreen();
     }
 
     private int conversationCount() {
@@ -748,16 +793,19 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         contactList.removeAllViews();
 
+        Map<String, UserProfile> contacts = profileStore.loadContacts();
+        Map<String, MessageStore.ConversationInfo> conversations = messageStore.loadConversationInfo();
+        Map<String, BtChatManager.DeviceCandidate> pairedCandidates = btChatManager.pairedCandidatesByAddress();
         LinkedHashMap<String, BtChatManager.DeviceCandidate> candidates = new LinkedHashMap<>();
         Set<String> addresses = new HashSet<>();
-        for (String address : profileStore.loadContacts().keySet()) {
+        for (String address : contacts.keySet()) {
             addresses.add(address);
-            BtChatManager.DeviceCandidate candidate = btChatManager.getPairedCandidate(address);
+            BtChatManager.DeviceCandidate candidate = pairedCandidates.get(address);
             if (candidate != null) {
                 candidates.put(address, candidate);
             }
         }
-        addresses.addAll(messageStore.loadConversationInfo().keySet());
+        addresses.addAll(conversations.keySet());
         for (BtChatManager.DeviceCandidate candidate : discoveredDevices.values()) {
             if (candidate.paired && candidate.appAvailable) {
                 addresses.add(candidate.address);
@@ -775,18 +823,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         List<String> orderedAddresses = new ArrayList<>(addresses);
         Collections.sort(orderedAddresses, (left, right) -> {
-            long leftAt = messageStore.getConversationInfo(left).lastAt;
-            long rightAt = messageStore.getConversationInfo(right).lastAt;
+            long leftAt = conversationInfo(conversations, left).lastAt;
+            long rightAt = conversationInfo(conversations, right).lastAt;
             return Long.compare(rightAt, leftAt);
         });
 
         int rendered = 0;
         for (String address : orderedAddresses) {
             BtChatManager.DeviceCandidate candidate = candidates.get(address);
-            if (!conversationMatches(address, candidate)) {
+            UserProfile known = contacts.containsKey(address) ? contacts.get(address) : UserProfile.empty();
+            MessageStore.ConversationInfo conversation = conversationInfo(conversations, address);
+            if (!conversationMatches(address, candidate, known, conversation)) {
                 continue;
             }
-            contactList.addView(contactRow(address, candidate), topMargin(dp(8)));
+            contactList.addView(contactRow(address, candidate, known, conversation), topMargin(dp(8)));
             rendered++;
         }
         if (rendered == 0) {
@@ -796,13 +846,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
-    private boolean conversationMatches(String address, BtChatManager.DeviceCandidate candidate) {
+    private MessageStore.ConversationInfo conversationInfo(Map<String, MessageStore.ConversationInfo> conversations, String address) {
+        MessageStore.ConversationInfo info = conversations.get(address);
+        return info == null ? new MessageStore.ConversationInfo(address, "", 0L, 0) : info;
+    }
+
+    private boolean conversationMatches(String address, BtChatManager.DeviceCandidate candidate, UserProfile known, MessageStore.ConversationInfo conversation) {
         String query = searchable(conversationFilter);
         if (query.isEmpty()) {
             return true;
         }
-        UserProfile known = profileStore.loadContact(address);
-        MessageStore.ConversationInfo conversation = messageStore.getConversationInfo(address);
         String name = known.isComplete() ? known.getDisplayName() : (candidate == null ? "Contato nBTChat" : candidate.name);
         String haystack = searchable(name + " " + known.getStatus() + " " + conversation.lastBody + " " + address);
         return haystack.contains(query);
@@ -1265,9 +1318,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return row;
     }
 
-    private View contactRow(String address, BtChatManager.DeviceCandidate candidate) {
-        UserProfile known = profileStore.loadContact(address);
-        MessageStore.ConversationInfo conversation = messageStore.getConversationInfo(address);
+    private View contactRow(String address, BtChatManager.DeviceCandidate candidate, UserProfile known, MessageStore.ConversationInfo conversation) {
         LinearLayout row = horizontal();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -1453,6 +1504,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showChatScreen(UserProfile profile, String fingerprint) {
+        if (btChatManager != null) {
+            btChatManager.stopDiscovery();
+        }
         currentScreen = "chat";
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         currentFingerprint = fingerprint == null ? "" : fingerprint;
@@ -1464,7 +1518,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         LinearLayout top = horizontal();
         top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showHomeScreen()));
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> leaveChatToHome()));
 
         FrameLayout avatarFrame = avatarStatusFrame(currentRemoteProfile, contactPresenceStatus(currentRemoteAddress), dp(52), dp(18), dp(4), false, v -> showContactInfoDialog());
         chatAvatarFrame = avatarFrame;
@@ -2075,7 +2129,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             item.addView(pending, topMargin(dp(14)));
             LinearLayout actions = horizontal();
             actions.setGravity(Gravity.CENTER_VERTICAL);
-            Button resume = pillButton("Abrir pagamento", surfaceAlt(), primary());
+            Button resume = pillButton("Abrir pagina", surfaceAlt(), primary());
             resume.setOnClickListener(v -> openPendingCartelaPayment());
             actions.addView(resume, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             Button check = pillButton("Verificar", "#16A34A", "#FFFFFF");
@@ -2093,6 +2147,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Button buy = pillButton("Comprar", "#16A34A", "#FFFFFF");
             buy.setOnClickListener(v -> startCartelaPurchase());
             item.addView(buy, topMargin(dp(12)));
+            Button recover = pillButton("Recuperar compra", surfaceAlt(), primary());
+            recover.setOnClickListener(v -> recoverCartelaPurchase());
+            item.addView(recover, topMargin(dp(8)));
             item.setOnClickListener(v -> buy.performClick());
         }
         return item;
@@ -2104,6 +2161,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         gadgetStore.savePendingTable100Payment(checkoutUri.toString(), deviceId);
         openExternalLink(checkoutUri);
         Toast.makeText(this, "Conclua o pagamento e volte ao nBTChat.", Toast.LENGTH_LONG).show();
+        showStoreScreen();
+    }
+
+    private void recoverCartelaPurchase() {
+        String deviceId = StoreDeviceId.get(this);
+        Uri recoveryUri = storePaymentClient.cartelaRecoveryUri(deviceId);
+        gadgetStore.savePendingTable100Payment(recoveryUri.toString(), deviceId);
+        openExternalLink(recoveryUri);
+        Toast.makeText(this, "Informe CPF e ID do pagamento. Depois volte ao nBTChat.", Toast.LENGTH_LONG).show();
         showStoreScreen();
     }
 
