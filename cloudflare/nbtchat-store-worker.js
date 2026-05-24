@@ -33,6 +33,18 @@ export default {
       if (request.method === "GET" && url.pathname === "/entitlement") {
         return entitlement(env, url);
       }
+      if (request.method === "GET" && url.pathname === "/cartela/state") {
+        return cartelaState(env, url);
+      }
+      if (request.method === "POST" && url.pathname === "/cartela/register") {
+        return registerCartela(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/cartela/choose") {
+        return chooseCartelaNumber(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/cartela/confirm") {
+        return confirmCartelaNumber(request, env);
+      }
       if (request.method === "GET" && ["/success", "/pending", "/failure"].includes(url.pathname)) {
         return resultPage(url.pathname, env, url);
       }
@@ -271,6 +283,158 @@ async function entitlement(env, url) {
     title: record.title || PRODUCTS[productId]?.title || productId,
     expiresAt: record.expiresAt,
   });
+}
+
+async function registerCartela(request, env) {
+  const data = await readBody(request);
+  const tableId = clean(data.tableId);
+  const ownerDeviceId = clean(data.ownerDeviceId);
+  if (!tableId || !ownerDeviceId) {
+    return json({ error: "missing_params" }, 400);
+  }
+  const active = await activeEntitlement(env, ownerDeviceId, "cartela_de_eventos");
+  if (!active.active) {
+    return json({ error: "entitlement_required" }, 403);
+  }
+  const existing = await readCartela(env, tableId);
+  if (existing.ownerDeviceId && existing.ownerDeviceId !== ownerDeviceId) {
+    return json({ error: "owner_mismatch" }, 403);
+  }
+  const cartela = {
+    tableId,
+    productId: "cartela_de_eventos",
+    ownerDeviceId,
+    ownerName: clean(data.ownerName),
+    ownerMessage: clean(data.ownerMessage),
+    copyText: clean(data.copyText),
+    ownerContact: clean(data.ownerContact),
+    expiresAt: active.expiresAt,
+    choices: Array.isArray(existing.choices) ? existing.choices : [],
+    createdAt: existing.createdAt || Date.now(),
+    updatedAt: Date.now(),
+  };
+  await writeCartela(env, cartela);
+  return json({ ok: true, cartela: publicCartela(cartela) });
+}
+
+async function cartelaState(env, url) {
+  const tableId = clean(url.searchParams.get("tableId"));
+  if (!tableId) {
+    return json({ error: "missing_params" }, 400);
+  }
+  const cartela = await readCartela(env, tableId);
+  if (!cartela.tableId) {
+    return json({ error: "cartela_not_found" }, 404);
+  }
+  return json({ ok: true, cartela: publicCartela(cartela) });
+}
+
+async function chooseCartelaNumber(request, env) {
+  const data = await readBody(request);
+  const tableId = clean(data.tableId);
+  const chooserDeviceId = clean(data.chooserDeviceId);
+  const chooserName = clean(data.chooserName);
+  const number = Number.parseInt(data.number, 10);
+  if (!tableId || !chooserDeviceId || number < 1 || number > 100) {
+    return json({ error: "invalid_choice" }, 400);
+  }
+  const cartela = await readCartela(env, tableId);
+  if (!cartela.tableId) {
+    return json({ error: "cartela_not_found" }, 404);
+  }
+  if (cartela.expiresAt && cartela.expiresAt <= Date.now()) {
+    return json({ error: "cartela_expired" }, 410);
+  }
+  cartela.choices = Array.isArray(cartela.choices) ? cartela.choices : [];
+  const taken = cartela.choices.find((choice) => Number(choice.number) === number);
+  if (taken && taken.chooserDeviceId !== chooserDeviceId) {
+    return json({ error: "number_taken", cartela: publicCartela(cartela) }, 409);
+  }
+  if (taken) {
+    taken.chooserName = chooserName || taken.chooserName || "Contato";
+    taken.updatedAt = Date.now();
+  } else {
+    cartela.choices.push({
+      id: `${chooserDeviceId}:${number}`,
+      chooserDeviceId,
+      chooserName: chooserName || "Contato",
+      number,
+      confirmed: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  }
+  cartela.updatedAt = Date.now();
+  await writeCartela(env, cartela);
+  return json({ ok: true, cartela: publicCartela(cartela) });
+}
+
+async function confirmCartelaNumber(request, env) {
+  const data = await readBody(request);
+  const tableId = clean(data.tableId);
+  const ownerDeviceId = clean(data.ownerDeviceId);
+  const chooserDeviceId = clean(data.chooserDeviceId);
+  const number = Number.parseInt(data.number, 10);
+  if (!tableId || !ownerDeviceId || !chooserDeviceId || number < 1 || number > 100) {
+    return json({ error: "invalid_confirmation" }, 400);
+  }
+  const cartela = await readCartela(env, tableId);
+  if (!cartela.tableId) {
+    return json({ error: "cartela_not_found" }, 404);
+  }
+  if (cartela.ownerDeviceId !== ownerDeviceId) {
+    return json({ error: "owner_mismatch" }, 403);
+  }
+  cartela.choices = Array.isArray(cartela.choices) ? cartela.choices : [];
+  const choice = cartela.choices.find((item) => item.chooserDeviceId === chooserDeviceId && Number(item.number) === number);
+  if (!choice) {
+    return json({ error: "choice_not_found" }, 404);
+  }
+  choice.confirmed = !!data.confirmed;
+  choice.updatedAt = Date.now();
+  cartela.updatedAt = Date.now();
+  await writeCartela(env, cartela);
+  return json({ ok: true, cartela: publicCartela(cartela) });
+}
+
+async function activeEntitlement(env, deviceId, productId) {
+  const raw = await env.STORE.get(`entitlement:${deviceId}:${productId}`);
+  if (!raw) {
+    return { active: false, expiresAt: 0 };
+  }
+  const record = JSON.parse(raw);
+  const active = !!record.expiresAt && record.expiresAt > Date.now();
+  return { active, expiresAt: record.expiresAt || 0 };
+}
+
+async function readCartela(env, tableId) {
+  const raw = await env.STORE.get(`cartela:${tableId}`);
+  return raw ? JSON.parse(raw) : {};
+}
+
+async function writeCartela(env, cartela) {
+  await env.STORE.put(`cartela:${cartela.tableId}`, JSON.stringify(cartela));
+}
+
+function publicCartela(cartela) {
+  return {
+    tableId: cartela.tableId || "",
+    productId: cartela.productId || "cartela_de_eventos",
+    ownerDeviceId: cartela.ownerDeviceId || "",
+    ownerName: cartela.ownerName || "",
+    ownerMessage: cartela.ownerMessage || "",
+    copyText: cartela.copyText || "",
+    ownerContact: cartela.ownerContact || "",
+    expiresAt: cartela.expiresAt || 0,
+    choices: (Array.isArray(cartela.choices) ? cartela.choices : []).map((choice) => ({
+      chooserDeviceId: choice.chooserDeviceId || "",
+      chooserName: choice.chooserName || "Contato",
+      number: Number(choice.number) || 0,
+      confirmed: !!choice.confirmed,
+      updatedAt: choice.updatedAt || choice.createdAt || 0,
+    })),
+    updatedAt: cartela.updatedAt || 0,
+  };
 }
 
 function checkoutPage(url) {

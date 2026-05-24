@@ -4,6 +4,8 @@
 
 Objetivo: manter cartelas compartilhadas atualizadas mesmo quando os aparelhos nao estao proximos por Bluetooth.
 
+Status em 0.4.0: primeira versao implementada com Worker/KV e app Android. A cartela agora registra estado online por `tableId`, bloqueia numero duplicado no servidor, sincroniza escolhas ao abrir e permite confirmacao do dono pela internet. Proximos refinamentos naturais: fila local para reenviar escolhas quando a internet falhar, tela web administrativa do dono e historico/auditoria das confirmacoes.
+
 Fluxo desejado:
 
 - A compra/cria a Cartela de eventos e vira dona da cartela.

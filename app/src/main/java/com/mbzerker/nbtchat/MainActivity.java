@@ -157,6 +157,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final List<PendingDelete> pendingDeletes = new ArrayList<>();
     private final Map<String, Long> lastWakeAttemptAt = new HashMap<>();
     private final Map<String, Long> lastPairRepairAt = new HashMap<>();
+    private final Map<String, Long> lastCartelaSyncAt = new HashMap<>();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
     private ProfileStore profileStore;
@@ -206,6 +207,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private ImageView chatConnectionIcon;
     private boolean messageReceiverRegistered;
     private boolean cartelaSyncInProgress;
+    private boolean cartelaOnlineSyncInProgress;
     private boolean updateAvailable;
     private String updateVersionName = "";
     private String updatePageUrl = DOWNLOAD_PAGE_URL;
@@ -2028,6 +2030,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showTable100ConfigScreen();
             return;
         }
+        registerCartelaOnline(false);
         String body = payload.toMessageBody();
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
@@ -2049,7 +2052,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 lockedNumbers.add(number);
             }
         }
-        return new GadgetStore.Table100Payload(payload.tableId, payload.ownerMessage, payload.copyText, payload.ownerContact, lockedNumbers);
+        String ownerDeviceId = payload.ownerDeviceId.isEmpty() ? StoreDeviceId.get(this) : payload.ownerDeviceId;
+        return new GadgetStore.Table100Payload(payload.tableId, payload.ownerMessage, payload.copyText, payload.ownerContact, ownerDeviceId, lockedNumbers);
     }
 
     private String table100BodyWithKnownLocks(String body) {
@@ -2205,6 +2209,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     if (entitlement.active && entitlement.expiresAt > System.currentTimeMillis()) {
                         gadgetStore.activateTable100Until(entitlement.expiresAt);
                         gadgetStore.clearPendingTable100Payment();
+                        registerCartelaOnline(false);
                         Toast.makeText(this, "Cartela de eventos liberada.", Toast.LENGTH_LONG).show();
                         showTable100ConfigScreen();
                     } else if (showFeedback) {
@@ -2229,6 +2234,77 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 });
             }
         }, "nBTChat-store-sync").start();
+    }
+
+    private void registerCartelaOnline(boolean showFeedback) {
+        if (storePaymentClient == null || gadgetStore == null || !gadgetStore.hasTable100()) {
+            return;
+        }
+        GadgetStore.Table100Payload payload = table100PayloadWithKnownLocks(gadgetStore.table100Payload());
+        UserProfile local = profileStore.loadLocalProfile();
+        String ownerDeviceId = StoreDeviceId.get(this);
+        new Thread(() -> {
+            try {
+                StorePaymentClient.CartelaState state = storePaymentClient.registerCartela(
+                        payload.tableId,
+                        ownerDeviceId,
+                        local.isComplete() ? local.getDisplayName() : "Dono",
+                        payload.ownerMessage,
+                        payload.copyText,
+                        payload.ownerContact
+                );
+                gadgetStore.mergeOnlineCartela(state);
+                runOnUiThread(() -> {
+                    if (showFeedback) {
+                        Toast.makeText(this, "Cartela sincronizada pela internet.", Toast.LENGTH_SHORT).show();
+                    }
+                    refreshTable100IfOpen(payload.tableId);
+                });
+            } catch (Exception ex) {
+                if (showFeedback) {
+                    runOnUiThread(() -> Toast.makeText(this, "Nao foi possivel sincronizar a cartela online.", Toast.LENGTH_LONG).show());
+                }
+            }
+        }, "nBTChat-cartela-register").start();
+    }
+
+    private void syncCartelaOnline(GadgetStore.Table100Payload payload, boolean showFeedback) {
+        if (payload == null || payload.tableId.isEmpty() || storePaymentClient == null || cartelaOnlineSyncInProgress) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long last = lastCartelaSyncAt.containsKey(payload.tableId) ? lastCartelaSyncAt.get(payload.tableId) : 0L;
+        if (!showFeedback && now - last < 10_000L) {
+            return;
+        }
+        lastCartelaSyncAt.put(payload.tableId, now);
+        cartelaOnlineSyncInProgress = true;
+        new Thread(() -> {
+            try {
+                StorePaymentClient.CartelaState state = storePaymentClient.getCartelaState(payload.tableId);
+                gadgetStore.mergeOnlineCartela(state);
+                runOnUiThread(() -> {
+                    cartelaOnlineSyncInProgress = false;
+                    if (showFeedback) {
+                        Toast.makeText(this, "Cartela atualizada.", Toast.LENGTH_SHORT).show();
+                    }
+                    refreshTable100IfOpen(payload.tableId);
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    cartelaOnlineSyncInProgress = false;
+                    if (showFeedback) {
+                        Toast.makeText(this, "Nao foi possivel atualizar pela internet.", Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        }, "nBTChat-cartela-state").start();
+    }
+
+    private void refreshTable100IfOpen(String tableId) {
+        if ("table100_play".equals(currentScreen) && tableId != null && currentTable100Text.contains(tableId)) {
+            refreshTable100PlayScreen();
+        }
     }
 
     private void showTable100OptionsDialog() {
@@ -2331,6 +2407,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Button save = pillButton("Salvar", "#16A34A", "#FFFFFF");
         save.setOnClickListener(v -> {
             gadgetStore.saveTable100Texts(messageInput.getText().toString(), copyInput.getText().toString(), contactInput.getText().toString());
+            registerCartelaOnline(false);
             hideKeyboard(contactInput);
             Toast.makeText(this, "Cartela de eventos salva.", Toast.LENGTH_SHORT).show();
             showStoreScreen();
@@ -2399,6 +2476,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         setContentView(scrollView);
         requestInsets(root);
+        if (owner) {
+            registerCartelaOnline(false);
+        }
+        syncCartelaOnline(payload, false);
     }
 
     private void refreshTable100PlayScreen() {
@@ -3323,11 +3404,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void markTable100Choice(GadgetStore.Table100Payload payload, int number) {
-        if (payload == null || payload.tableId.isEmpty() || currentRemoteAddress == null || currentRemoteAddress.isEmpty()) {
+        if (payload == null || payload.tableId.isEmpty()) {
             return;
         }
-        UserProfile owner = profileStore.loadContact(currentRemoteAddress);
-        gadgetStore.saveChoice(payload.tableId, currentRemoteAddress, number, owner.isComplete() ? owner.getDisplayName() : "Contato", false);
+        UserProfile local = profileStore.loadLocalProfile();
+        String chooserName = local.isComplete() ? local.getDisplayName() : "Contato";
+        String chooserDeviceId = StoreDeviceId.get(this);
+        gadgetStore.saveChoice(payload.tableId, chooserDeviceId, number, chooserName, false);
+        chooseTable100NumberOnline(payload, number, chooserDeviceId, chooserName);
         sendTable100Choice(payload, number);
     }
 
@@ -3372,11 +3456,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private boolean table100HasLocalChoice(GadgetStore.Table100Payload payload) {
-        if (payload == null || payload.tableId.isEmpty() || currentRemoteAddress == null || currentRemoteAddress.isEmpty()) {
+        if (payload == null || payload.tableId.isEmpty()) {
             return false;
         }
+        String deviceId = StoreDeviceId.get(this);
         for (GadgetStore.Table100Choice choice : gadgetStore.loadChoices(payload.tableId)) {
-            if (currentRemoteAddress.equals(choice.address)) {
+            if (deviceId.equals(choice.address)) {
                 return true;
             }
         }
@@ -3436,6 +3521,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     }
                     String address = "manual:" + payload.tableId + ":" + number + ":" + Long.toHexString(System.currentTimeMillis());
                     gadgetStore.saveChoice(payload.tableId, address, number, name.isEmpty() ? "Pessoa externa" : name, false);
+                    chooseTable100NumberOnline(payload, number, address, name.isEmpty() ? "Pessoa externa" : name);
                     refreshTable100PlayScreen();
                 })
                 .setNegativeButton("Cancelar", null)
@@ -3465,6 +3551,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     .setMessage("Deseja " + action + " " + safeName(name, "Contato") + " no numero " + choice.number + "?")
                     .setPositiveButton("Sim", (dialog, which) -> {
                         gadgetStore.setChoiceConfirmed(payload.tableId, choice.address, choice.number, target);
+                        confirmTable100NumberOnline(payload, choice.address, choice.number, target);
                         sendTable100Confirmation(payload, choice.address, choice.number, target);
                         refreshTable100PlayScreen();
                     })
@@ -3485,14 +3572,44 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             json.put("tableId", payload.tableId);
             json.put("number", number);
             json.put("name", profileStore.loadLocalProfile().getDisplayName());
+            json.put("chooserDeviceId", StoreDeviceId.get(this));
             sendOrQueueOutgoing(currentRemoteAddress, messageStore.createId(), MessageStore.KIND_TABLE_100_CHOICE,
                     json.toString(), "", 0L, System.currentTimeMillis());
         } catch (Exception ignored) {
         }
     }
 
+    private void chooseTable100NumberOnline(GadgetStore.Table100Payload payload, int number, String chooserDeviceId, String chooserName) {
+        if (storePaymentClient == null || payload == null || payload.tableId.isEmpty()) {
+            return;
+        }
+        new Thread(() -> {
+            try {
+                StorePaymentClient.CartelaState state = storePaymentClient.chooseCartelaNumber(payload.tableId, chooserDeviceId, chooserName, number);
+                gadgetStore.mergeOnlineCartela(state);
+                runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+            } catch (Exception ex) {
+                String message = ex.getMessage() == null ? "" : ex.getMessage();
+                if ("number_taken".equals(message)) {
+                    gadgetStore.removeChoice(payload.tableId, chooserDeviceId, number);
+                    try {
+                        StorePaymentClient.CartelaState state = storePaymentClient.getCartelaState(payload.tableId);
+                        gadgetStore.mergeOnlineCartela(state);
+                    } catch (Exception ignored) {
+                    }
+                    runOnUiThread(() -> {
+                        Toast.makeText(this, "Este numero ja foi escolhido por outra pessoa.", Toast.LENGTH_LONG).show();
+                        refreshTable100IfOpen(payload.tableId);
+                    });
+                } else {
+                    runOnUiThread(() -> Toast.makeText(this, "Escolha salva localmente. Vou sincronizar quando houver internet.", Toast.LENGTH_LONG).show());
+                }
+            }
+        }, "nBTChat-cartela-choice").start();
+    }
+
     private void sendTable100Confirmation(GadgetStore.Table100Payload payload, String address, int number, boolean confirmed) {
-        if (address == null || address.startsWith("manual:")) {
+        if (address == null || address.startsWith("manual:") || address.startsWith("nbt-")) {
             return;
         }
         try {
@@ -3504,6 +3621,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     json.toString(), "", 0L, System.currentTimeMillis());
         } catch (Exception ignored) {
         }
+    }
+
+    private void confirmTable100NumberOnline(GadgetStore.Table100Payload payload, String chooserDeviceId, int number, boolean confirmed) {
+        if (storePaymentClient == null || payload == null || payload.tableId.isEmpty()) {
+            return;
+        }
+        String ownerDeviceId = StoreDeviceId.get(this);
+        new Thread(() -> {
+            try {
+                StorePaymentClient.CartelaState state = storePaymentClient.confirmCartelaNumber(payload.tableId, ownerDeviceId, chooserDeviceId, number, confirmed);
+                gadgetStore.mergeOnlineCartela(state);
+                runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+            } catch (Exception ex) {
+                runOnUiThread(() -> Toast.makeText(this, "Confirmacao salva localmente. Vou sincronizar quando possivel.", Toast.LENGTH_LONG).show());
+            }
+        }, "nBTChat-cartela-confirm").start();
     }
 
     private boolean handleTable100Event(String address, String kind, String body) {
@@ -3519,7 +3652,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             if (MessageStore.KIND_TABLE_100_CHOICE.equals(kind)) {
                 String name = json.optString("name", "");
-                gadgetStore.saveChoice(tableId, address, number, name, false);
+                String chooserDeviceId = json.optString("chooserDeviceId", address);
+                gadgetStore.saveChoice(tableId, chooserDeviceId, number, name, false);
             } else {
                 boolean confirmed = json.optBoolean("confirmed", false);
                 gadgetStore.setChoiceConfirmed(tableId, address, number, confirmed);

@@ -147,6 +147,15 @@ public final class GadgetStore {
         return new Table100Payload(tableId, table100OwnerMessage(), table100CopyText(), table100OwnerContact(), lockedNumbers(tableId));
     }
 
+    public void mergeOnlineCartela(StorePaymentClient.CartelaState state) {
+        if (state == null || state.tableId.isEmpty()) {
+            return;
+        }
+        for (StorePaymentClient.CartelaChoice choice : state.choices) {
+            saveChoice(state.tableId, choice.chooserDeviceId, choice.number, choice.chooserName, choice.confirmed);
+        }
+    }
+
     public List<Integer> lockedNumbers(String tableId) {
         List<Integer> numbers = new ArrayList<>();
         for (Table100Choice choice : loadChoices(tableId)) {
@@ -209,6 +218,31 @@ public final class GadgetStore {
         }
     }
 
+    public void removeChoice(String tableId, String address, int number) {
+        if (tableId == null || address == null) {
+            return;
+        }
+        try {
+            JSONArray items = rawChoices();
+            JSONArray kept = new JSONArray();
+            boolean changed = false;
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                if (tableId.equals(item.optString("tableId", ""))
+                        && address.equals(item.optString("address", ""))
+                        && number == item.optInt("number", -1)) {
+                    changed = true;
+                    continue;
+                }
+                kept.put(item);
+            }
+            if (changed) {
+                prefs.edit().putString(KEY_TABLE_100_CHOICES, kept.toString()).apply();
+            }
+        } catch (JSONException ignored) {
+        }
+    }
+
     public int choiceStatus(String tableId, String address, int number) {
         if (tableId == null || address == null) {
             return 0;
@@ -258,17 +292,23 @@ public final class GadgetStore {
         public final String ownerMessage;
         public final String copyText;
         public final String ownerContact;
+        public final String ownerDeviceId;
         public final List<Integer> lockedNumbers;
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact) {
-            this(tableId, ownerMessage, copyText, ownerContact, new ArrayList<>());
+            this(tableId, ownerMessage, copyText, ownerContact, "", new ArrayList<>());
         }
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact, List<Integer> lockedNumbers) {
+            this(tableId, ownerMessage, copyText, ownerContact, "", lockedNumbers);
+        }
+
+        Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact, String ownerDeviceId, List<Integer> lockedNumbers) {
             this.tableId = tableId == null ? "" : tableId;
             this.ownerMessage = ownerMessage == null ? "" : ownerMessage;
             this.copyText = copyText == null ? "" : copyText;
             this.ownerContact = ownerContact == null ? "" : ownerContact;
+            this.ownerDeviceId = ownerDeviceId == null ? "" : ownerDeviceId;
             this.lockedNumbers = cleanLockedNumbers(lockedNumbers);
         }
 
@@ -280,6 +320,7 @@ public final class GadgetStore {
                 json.put("ownerMessage", ownerMessage);
                 json.put("copyText", copyText);
                 json.put("ownerContact", ownerContact);
+                json.put("ownerDeviceId", ownerDeviceId);
                 json.put("lockedNumbers", numbersToJson(lockedNumbers));
                 return json.toString();
             } catch (JSONException ignored) {
@@ -303,6 +344,7 @@ public final class GadgetStore {
                             json.optString("ownerMessage", ""),
                             json.optString("copyText", ""),
                             json.optString("ownerContact", ""),
+                            json.optString("ownerDeviceId", ""),
                             numbersFromJson(json.optJSONArray("lockedNumbers"))
                     );
                 }

@@ -14,5 +14,9 @@ Worker publico usado pela loja do nBTChat.
 - `POST /webhook/mercadopago`: recebe notificacoes de pagamento aprovado.
 - `GET /entitlement?deviceId=...&productId=cartela_de_eventos`: consulta se a Cartela de eventos esta ativa.
 - `GET /recover?productId=cartela_de_eventos&deviceId=...`: pagina para recuperar uma compra usando CPF e codigo de recuperacao nBTChat.
+- `POST /cartela/register`: registra/atualiza uma Cartela de eventos comprada.
+- `GET /cartela/state?tableId=...`: consulta numeros escolhidos/confirmados da cartela.
+- `POST /cartela/choose`: marca um numero como escolhido, impedindo duplicidade.
+- `POST /cartela/confirm`: dono confirma ou remove confirmacao de uma escolha.
 
 O app nao precisa carregar chave secreta. Nome e CPF ficam no fluxo do Worker/Mercado Pago; o app envia apenas o `deviceId` pseudonimo e consulta a liberacao. O codigo de recuperacao e mostrado antes do pagamento e deve ser guardado pelo comprador.
