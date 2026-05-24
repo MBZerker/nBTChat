@@ -86,6 +86,10 @@ public final class EncryptedPrefs {
         return new Editor(prefs.edit());
     }
 
+    public void clear() {
+        prefs.edit().clear().apply();
+    }
+
     private void migratePlainValues() {
         SharedPreferences.Editor editor = null;
         for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {

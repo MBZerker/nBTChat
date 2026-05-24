@@ -13,6 +13,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -121,6 +122,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_SCAN_QR = 107;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND = 108;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND_FILE = 109;
+    private static final int REQUEST_RESTORE_BACKUP = 110;
     private static final int MAX_GIF_BYTES = 640 * 1024;
     private static final int PROFILE_IMAGE_MAX_SIDE = 256;
     private static final int CHAT_IMAGE_MAX_SIDE = 960;
@@ -428,6 +430,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     showSettingsScreen();
                 }
             }
+        } else if (requestCode == REQUEST_RESTORE_BACKUP && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            restoreBackupFromUri(data.getData());
         }
     }
 
@@ -1343,12 +1347,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         LinearLayout info = vertical();
         String title = known.isComplete() ? known.getDisplayName() : (candidate == null ? "Contato nBTChat" : candidate.name);
+        boolean typing = isRemoteTyping(address);
         String subtitle = contactSubtitle(address, title, known, conversation);
         TextView titleView = text(safeName(title, "Contato nBTChat"), 17, primary(), Typeface.BOLD);
         titleView.setSingleLine(true);
         titleView.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(titleView);
-        TextView subtitleView = text(subtitle, 13, secondary(), Typeface.NORMAL);
+        TextView subtitleView = text(subtitle, 13, typing ? "#16A34A" : secondary(), Typeface.NORMAL);
         subtitleView.setSingleLine(true);
         subtitleView.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(subtitleView);
@@ -1375,7 +1380,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private String contactSubtitle(String address, String title, UserProfile profile, MessageStore.ConversationInfo conversation) {
         if (isRemoteTyping(address)) {
-            return safeName(title, "Contato") + " esta digitando...";
+            return "Digitando";
         }
         if (profileStore.isBlocked(address)) {
             return "Bloqueado";
@@ -2659,6 +2664,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             playingVoicePlayer.prepare();
             playingVoiceId = id == null ? "" : id;
             playingVoiceControls = controls;
+            if (!controls.mine && !playingVoiceId.isEmpty()) {
+                messageStore.markVoiceHeard(currentRemoteAddress, playingVoiceId);
+                applyVoiceSeekBarTint(controls.seekBar, true);
+            }
             controls.seekBar.setMax(Math.max(1, playingVoicePlayer.getDuration()));
             controls.button.setImageResource(R.drawable.ic_pause_24);
             playingVoicePlayer.start();
@@ -2761,13 +2770,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         int position = Math.max(0, playingVoicePlayer.getCurrentPosition());
         playingVoiceControls.seekBar.setMax(duration);
         playingVoiceControls.seekBar.setProgress(Math.min(position, duration));
-        playingVoiceControls.time.setText(formatDuration(position) + "/" + formatDuration(duration));
+        playingVoiceControls.time.setText(formatDuration(Math.max(0, duration - position)));
     }
 
     private void resetVoiceControls(VoiceControls controls) {
         controls.button.setImageResource(R.drawable.ic_play_24);
         controls.seekBar.setProgress(0);
-        controls.time.setText("00:00/" + formatDuration(controls.durationMs));
+        controls.time.setText(formatDuration(controls.durationMs));
     }
 
     private void playNextVoice(String completedId) {
@@ -3043,8 +3052,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             attachMessageGestures(voiceRow, id);
             ImageButton play = iconButton(R.drawable.ic_play_24, "Tocar audio", dp(42), null);
             SeekBar seekBar = new SeekBar(this);
-            TextView time = text("00:00/" + formatDuration(durationMs), 12, mine ? "#D7FBE8" : secondary(), Typeface.BOLD);
-            VoiceControls controls = new VoiceControls(play, seekBar, time, durationMs);
+            boolean heard = mine || messageStore.isVoiceHeard(currentRemoteAddress, id);
+            applyVoiceSeekBarTint(seekBar, heard);
+            TextView time = text(formatDuration(durationMs), 12, mine ? "#D7FBE8" : secondary(), Typeface.BOLD);
+            VoiceControls controls = new VoiceControls(play, seekBar, time, durationMs, mine);
             if (id != null && !id.isEmpty()) {
                 voiceControls.put(id, controls);
             }
@@ -3066,10 +3077,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 public void onStopTrackingTouch(SeekBar seekBar) {
                 }
             });
-            voiceRow.addView(play);
-            voiceRow.addView(seekBar, new LinearLayout.LayoutParams(dp(150), LinearLayout.LayoutParams.WRAP_CONTENT));
-            voiceRow.addView(time, leftMargin(dp(4), LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            if (mine) {
+                voiceRow.addView(voiceAvatar(profileStore.loadLocalProfile(), true));
+                voiceRow.addView(play, leftMargin(dp(8), dp(42), dp(42)));
+                voiceRow.addView(seekBar, new LinearLayout.LayoutParams(dp(150), LinearLayout.LayoutParams.WRAP_CONTENT));
+            } else {
+                voiceRow.addView(play);
+                voiceRow.addView(seekBar, new LinearLayout.LayoutParams(dp(150), LinearLayout.LayoutParams.WRAP_CONTENT));
+                voiceRow.addView(voiceAvatar(currentRemoteProfile, false), leftMargin(dp(8), dp(42), dp(42)));
+            }
             bubble.addView(voiceRow);
+            time.setGravity(Gravity.LEFT);
+            bubble.addView(time, topMargin(dp(2)));
         } else {
             addTextContentToBubble(bubble, id, body, mine);
         }
@@ -3532,15 +3551,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (chatSubtitleText != null) {
             String subtitle;
+            String subtitleColor = secondary();
             if (isRemoteTyping(currentRemoteAddress)) {
-                String name = currentRemoteProfile.isComplete() ? currentRemoteProfile.getDisplayName() : "Contato";
-                subtitle = safeName(name, "Contato") + " esta digitando...";
+                subtitle = "Digitando";
+                subtitleColor = "#16A34A";
             } else if (profileStore.isBlocked(currentRemoteAddress)) {
                 subtitle = "Bloqueado";
             } else {
                 subtitle = currentRemoteProfile.getStatus().isEmpty() ? "Bluetooth seguro" : currentRemoteProfile.getStatus();
             }
             chatSubtitleText.setText(subtitle);
+            chatSubtitleText.setTextColor(color(subtitleColor));
         }
         updateChatHeaderStatus();
     }
@@ -3940,6 +3961,60 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         startActivity(Intent.createChooser(intent, "Compartilhar nBTChat"));
     }
 
+    private void shareBackupZip() {
+        new Thread(() -> {
+            try {
+                File backup = new BackupStore().createZipBackup(this);
+                Uri uri = BackupFileProvider.uriFor(this, backup);
+                Intent intent = new Intent(Intent.ACTION_SEND);
+                intent.setType("application/zip");
+                intent.putExtra(Intent.EXTRA_SUBJECT, "Backup nBTChat");
+                intent.putExtra(Intent.EXTRA_STREAM, uri);
+                intent.setClipData(ClipData.newUri(getContentResolver(), "Backup nBTChat", uri));
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                uiHandler.post(() -> startActivity(Intent.createChooser(intent, "Enviar backup nBTChat")));
+            } catch (Exception ex) {
+                uiHandler.post(() -> Toast.makeText(this, "Nao foi possivel criar o backup.", Toast.LENGTH_LONG).show());
+            }
+        }, "nBTChat-backup-export").start();
+    }
+
+    private void confirmRestoreBackup() {
+        new AlertDialog.Builder(this)
+                .setTitle("Restaurar backup?")
+                .setMessage("A restauracao substitui os dados locais do nBTChat neste aparelho. Use apenas um ZIP que voce criou e guardou em local seguro.")
+                .setPositiveButton("Restaurar", (dialog, which) -> pickBackupZip())
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void pickBackupZip() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/zip", "application/octet-stream"});
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, REQUEST_RESTORE_BACKUP);
+        } catch (Exception ex) {
+            Toast.makeText(this, "Nao foi possivel abrir o seletor de arquivo.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void restoreBackupFromUri(Uri uri) {
+        new Thread(() -> {
+            try {
+                BackupStore.RestoreResult result = new BackupStore().restoreZipBackup(this, uri);
+                uiHandler.post(() -> {
+                    Toast.makeText(this, "Backup restaurado: " + result.values + " itens.", Toast.LENGTH_LONG).show();
+                    recreate();
+                });
+            } catch (Exception ex) {
+                uiHandler.post(() -> Toast.makeText(this, "Nao foi possivel restaurar este backup ZIP.", Toast.LENGTH_LONG).show());
+            }
+        }, "nBTChat-backup-restore").start();
+    }
+
     private void showSettingsScreen() {
         currentScreen = "settings";
         messageList = null;
@@ -4048,6 +4123,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         });
         privacyRow.addView(privacyToggle);
         card.addView(privacyRow, topMargin(dp(20)));
+
+        TextView backupTitle = text("Backup", 16, primary(), Typeface.BOLD);
+        card.addView(backupTitle, topMargin(dp(22)));
+        TextView backupHint = text("O arquivo ZIP guarda mensagens, perfil, contatos e chaves locais. Mantenha em um lugar privado e seguro.", 13, secondary(), Typeface.NORMAL);
+        backupHint.setLineSpacing(dp(2), 1f);
+        card.addView(backupHint, topMargin(dp(4)));
+        LinearLayout backupActions = horizontal();
+        Button exportBackup = pillButton("Enviar backup ZIP", "#16A34A", "#FFFFFF");
+        exportBackup.setOnClickListener(v -> shareBackupZip());
+        backupActions.addView(exportBackup, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button restoreBackup = pillButton("Restaurar", surfaceAlt(), primary());
+        restoreBackup.setOnClickListener(v -> confirmRestoreBackup());
+        LinearLayout.LayoutParams restoreParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        restoreParams.setMargins(dp(8), 0, 0, 0);
+        backupActions.addView(restoreBackup, restoreParams);
+        card.addView(backupActions, topMargin(dp(10)));
 
         root.addView(card, topMargin(dp(18)));
 
@@ -4792,6 +4883,34 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         bubble.addView(badge, params);
     }
 
+    private FrameLayout voiceAvatar(UserProfile profile, boolean mine) {
+        FrameLayout frame = new FrameLayout(this);
+        ImageView avatar = new ImageView(this);
+        applyAvatar(avatar, profile);
+        frame.addView(avatar, new FrameLayout.LayoutParams(dp(42), dp(42)));
+
+        ImageView mic = new ImageView(this);
+        mic.setImageResource(R.drawable.ic_mic_24);
+        mic.setColorFilter(color("#FFFFFF"));
+        mic.setPadding(dp(2), dp(2), dp(2), dp(2));
+        mic.setBackground(rounded("#16A34A", dp(8), "#16A34A"));
+        FrameLayout.LayoutParams micParams = new FrameLayout.LayoutParams(
+                dp(17),
+                dp(17),
+                (mine ? Gravity.RIGHT : Gravity.LEFT) | Gravity.BOTTOM
+        );
+        frame.addView(mic, micParams);
+        frame.setLayoutParams(new LinearLayout.LayoutParams(dp(42), dp(42)));
+        return frame;
+    }
+
+    private void applyVoiceSeekBarTint(SeekBar seekBar, boolean heard) {
+        int thumb = color(heard ? "#7DD3FC" : "#16A34A");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            seekBar.setThumbTintList(ColorStateList.valueOf(thumb));
+        }
+    }
+
     private void addChoiceXOverlay(Button cell) {
         cell.setText("X");
         cell.setTextColor(color("#DC2626"));
@@ -4809,14 +4928,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private FrameLayout avatarStatusFrame(UserProfile profile, String presence, int size, int radius, int borderWidth, boolean badge, View.OnClickListener clickListener) {
         FrameLayout frame = new FrameLayout(this);
+        int circleRadius = Math.max(radius, size / 2);
         frame.setPadding(borderWidth, borderWidth, borderWidth, borderWidth);
-        frame.setBackground(roundedStroke(surface(), radius, presenceColor(presence), borderWidth));
+        frame.setBackground(roundedStroke(surface(), circleRadius, presenceColor(presence), borderWidth));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             frame.setClipToOutline(true);
         }
         ImageView avatar = new ImageView(this);
         applyAvatar(avatar, profile);
-        avatar.setBackground(rounded(surfaceAlt(), Math.max(dp(8), radius - borderWidth), surfaceAlt()));
+        avatar.setBackground(rounded(surfaceAlt(), Math.max(dp(8), circleRadius - borderWidth), surfaceAlt()));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             avatar.setClipToOutline(true);
         }
@@ -4848,6 +4968,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             imageView.setClipToOutline(true);
         }
+        imageView.post(() -> {
+            int size = Math.min(imageView.getWidth(), imageView.getHeight());
+            if (size > 0) {
+                imageView.setBackground(rounded(surfaceAlt(), size / 2, surfaceAlt()));
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    imageView.setClipToOutline(true);
+                }
+            }
+        });
         Bitmap bitmap = profile == null ? null : decodePhoto(profile.getPhotoBase64());
         if (bitmap != null) {
             imageView.setImageBitmap(bitmap);
@@ -5036,12 +5165,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         final SeekBar seekBar;
         final TextView time;
         final long durationMs;
+        final boolean mine;
 
-        VoiceControls(ImageButton button, SeekBar seekBar, TextView time, long durationMs) {
+        VoiceControls(ImageButton button, SeekBar seekBar, TextView time, long durationMs, boolean mine) {
             this.button = button;
             this.seekBar = seekBar;
             this.time = time;
             this.durationMs = durationMs;
+            this.mine = mine;
         }
     }
 

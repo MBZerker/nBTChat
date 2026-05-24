@@ -44,6 +44,11 @@
             android:name=".QrScannerActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
+        <provider
+            android:name=".BackupFileProvider"
+            android:authorities="com.mbzerker.nbtchat.backupfiles"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 
 </manifest>

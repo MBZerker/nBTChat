@@ -37,6 +37,7 @@ public final class MessageStore {
     private static final String MESSAGE_PREFS = "chat_messages";
     private static final String META_PREFS = "chat_meta";
     private static final String KEY_UNREAD_PREFIX = "unread:";
+    private static final String KEY_VOICE_HEARD_PREFIX = "voice_heard:";
     private static final int MAX_MESSAGES_PER_CHAT = 500;
 
     private final EncryptedPrefs messagePrefs;
@@ -219,6 +220,20 @@ public final class MessageStore {
             return;
         }
         metaPrefs.edit().putInt(KEY_UNREAD_PREFIX + address, 0).apply();
+    }
+
+    public boolean isVoiceHeard(String address, String id) {
+        if (address == null || id == null || id.trim().isEmpty()) {
+            return false;
+        }
+        return metaPrefs.getBoolean(KEY_VOICE_HEARD_PREFIX + address + ":" + id, false);
+    }
+
+    public void markVoiceHeard(String address, String id) {
+        if (address == null || address.trim().isEmpty() || id == null || id.trim().isEmpty()) {
+            return;
+        }
+        metaPrefs.edit().putBoolean(KEY_VOICE_HEARD_PREFIX + address + ":" + id, true).apply();
     }
 
     public synchronized List<String> unreadMessageIds(String address) {
