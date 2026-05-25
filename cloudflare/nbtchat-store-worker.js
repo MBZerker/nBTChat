@@ -39,12 +39,20 @@ async function getProduct(env, productId) {
 
 function normalizeProduct(product, fallback) {
   const base = fallback || PRODUCTS.cartela_de_eventos;
+  let price = Math.max(0.01, Number(product.price) || base.price);
+  let dailyFee = Math.max(0, Number(product.dailyFee) || base.dailyFee || 0);
+  let durationDays = clampInt(product.durationDays, base.durationDays, 1, 365);
+  if (base.id === "cartela_de_eventos" && price === 4.99 && durationDays === 15 && !Number(product.dailyFee)) {
+    price = base.price;
+    dailyFee = base.dailyFee || 0;
+    durationDays = base.durationDays;
+  }
   return {
     id: clean(product.id || base.id),
     title: clean(product.title || base.title),
-    price: Math.max(0.01, Number(product.price) || base.price),
-    dailyFee: Math.max(0, Number(product.dailyFee) || base.dailyFee || 0),
-    durationDays: clampInt(product.durationDays, base.durationDays, 1, 365),
+    price,
+    dailyFee,
+    durationDays,
     footer: clean(product.footer || base.footer),
   };
 }
@@ -459,6 +467,8 @@ async function createPayment(request, env, url) {
   const deviceId = clean(data.deviceId);
   const buyerName = clean(data.buyerName);
   const buyerCpf = onlyDigits(data.buyerCpf);
+  const cartelas = normalizeCartelaOrder(data.cartelas, product);
+  const totalPrice = cartelas.reduce((sum, item) => sum + item.price, 0);
   if (!deviceId || buyerName.length < 3 || buyerCpf.length !== 11) {
     return json({ error: "invalid_buyer_data" }, 400);
   }
@@ -475,6 +485,8 @@ async function createPayment(request, env, url) {
     recoveryCode,
     recoveryCodeHash,
     recoveryCodeHint: recoveryCode.slice(-4),
+    cartelas,
+    totalPrice,
     createdAt: Date.now(),
   }), { expirationTtl: 2 * 24 * 60 * 60 });
 
@@ -484,7 +496,7 @@ async function createPayment(request, env, url) {
       title: product.title,
       quantity: 1,
       currency_id: "BRL",
-      unit_price: product.price,
+      unit_price: Number(totalPrice.toFixed(2)),
     }],
     payer: {
       name: buyerName,
@@ -524,6 +536,27 @@ async function createPayment(request, env, url) {
     initPoint: body.init_point,
     sandboxInitPoint: body.sandbox_init_point,
     externalReference,
+  });
+}
+
+function normalizeCartelaOrder(raw, product) {
+  let parsed = [];
+  try {
+    parsed = typeof raw === "string" && raw.trim() ? JSON.parse(raw) : [];
+  } catch (_) {
+    parsed = [];
+  }
+  if (!Array.isArray(parsed) || !parsed.length) {
+    parsed = [{ days: product.durationDays || 1 }];
+  }
+  return parsed.slice(0, 20).map((item, index) => {
+    const days = clampInt(item && item.days, product.durationDays || 1, 1, 365);
+    const price = product.price + (Number(product.dailyFee) || 0) * Math.pow(Math.max(0, days - 1), 1.25);
+    return {
+      index: index + 1,
+      days,
+      price: Number(price.toFixed(2)),
+    };
   });
 }
 
@@ -584,7 +617,9 @@ async function activateApprovedPayment(env, payment, paymentId) {
     return { activated: false, skipped: "product_mismatch" };
   }
 
-  const expiresAt = Date.now() + product.durationDays * 24 * 60 * 60 * 1000;
+  const cartelas = Array.isArray(pending.cartelas) && pending.cartelas.length ? pending.cartelas : [{ days: product.durationDays, price: product.price }];
+  const maxDays = Math.max(...cartelas.map((item) => clampInt(item.days, product.durationDays, 1, 365)));
+  const expiresAt = Date.now() + maxDays * 24 * 60 * 60 * 1000;
   const recoveryCodeHash = pending.recoveryCodeHash || await sha256(normalizeRecoveryCode(pending.recoveryCode || ""));
   const paymentRecord = {
     productId: product.id,
@@ -597,6 +632,8 @@ async function activateApprovedPayment(env, payment, paymentId) {
     cpfLast4: pending.cpfLast4,
     recoveryCodeHash,
     recoveryCodeHint: pending.recoveryCodeHint || (pending.recoveryCode || "").slice(-4),
+    cartelas,
+    totalPrice: Number(pending.totalPrice) || product.price,
     approvedAt: payment.date_approved || payment.date_created || new Date().toISOString(),
     expiresAt,
     updatedAt: Date.now(),
@@ -985,6 +1022,12 @@ async function checkoutPage(url, env) {
     p { line-height: 1.45; color: #52606d; }
     label { display: block; font-size: 13px; font-weight: 700; margin-top: 14px; }
     input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5cf; border-radius: 12px; padding: 13px; font-size: 16px; margin-top: 6px; }
+    .line { border: 1px solid #d7ddd8; border-radius: 14px; padding: 12px; margin-top: 10px; background: #f8faf9; }
+    .line-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-weight: 800; }
+    .line-controls { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+    .mini { width: auto; min-width: 42px; padding: 12px 14px; margin-top: 0; background: #eef2f0; color: #17212b; }
+    .add { background: #ddf7e8; color: #14532d; }
+    .total { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid #d7ddd8; font-weight: 900; }
     button { width: 100%; border: 0; border-radius: 14px; padding: 14px; margin-top: 18px; background: #16a34a; color: white; font-weight: 800; font-size: 16px; }
     .price { margin: 14px 0 8px; }
     .money { color: #16a34a; font-weight: 900; font-size: 24px; }
@@ -994,6 +1037,9 @@ async function checkoutPage(url, env) {
       body { background: #101820; color: #f7f8f5; }
       main { background: #18232c; border-color: #2f3b45; }
       input { background: #24313b; border-color: #2f3b45; color: #f7f8f5; }
+      .line { background: #1d2933; border-color: #2f3b45; }
+      .mini { background: #24313b; color: #f7f8f5; }
+      .add { background: #123328; color: #bbf7d0; }
     }
   </style>
 </head>
@@ -1002,18 +1048,63 @@ async function checkoutPage(url, env) {
     <div class="badge">#</div>
     <h1>${escapeHtml(product.title)}</h1>
     <p>100 numeros interativos para enviar em conversas do nBTChat.</p>
-    <p class="price"><span class="money">R$ ${product.price.toFixed(2).replace(".", ",")}</span><span class="days">${product.durationDays} dias</span></p>
+    <p class="price"><span class="money">R$ ${product.price.toFixed(2).replace(".", ",")}</span><span class="days">${product.durationDays} dia</span></p>
     <form method="post" action="/create-payment">
       <input type="hidden" name="productId" value="${escapeHtml(product.id)}">
       <input type="hidden" name="deviceId" value="${escapeHtml(deviceId)}">
+      <input type="hidden" name="cartelas" id="cartelasInput">
+      <label>Cartelas</label>
+      <div id="cartelas"></div>
+      <button type="button" class="add" onclick="addCartela()">+ Adicionar cartela</button>
+      <div class="total"><span>Total</span><span id="total">R$ 0,00</span></div>
       <label>Nome</label>
       <input name="buyerName" autocomplete="name" required minlength="3" maxlength="80">
       <label>CPF</label>
       <input name="buyerCpf" inputmode="numeric" autocomplete="off" required minlength="11" maxlength="14">
-      <button type="submit">Pagar com Mercado Pago</button>
+      <button type="submit" onclick="syncOrder()">Continuar pagamento</button>
     </form>
     <p class="footer">${escapeHtml(product.footer)}</p>
   </main>
+  <script>
+    const basePrice = ${JSON.stringify(Number(product.price.toFixed(2)))};
+    const dailyFee = ${JSON.stringify(Number((product.dailyFee || 0).toFixed(2)))};
+    const rows = [{ days: ${JSON.stringify(product.durationDays)} }];
+    const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+    function priceFor(days) {
+      return basePrice + dailyFee * Math.pow(Math.max(0, (Number(days) || 1) - 1), 1.25);
+    }
+    function renderRows() {
+      const host = document.getElementById("cartelas");
+      host.innerHTML = "";
+      rows.forEach((row, index) => {
+        const line = document.createElement("div");
+        line.className = "line";
+        line.innerHTML = '<div class="line-head"><span>Cartela ' + (index + 1) + '</span><span>' + money.format(priceFor(row.days)) + '</span></div>'
+          + '<div class="line-controls"><label>Dias de uso<input min="1" max="365" inputmode="numeric" type="number" value="' + row.days + '" oninput="setDays(' + index + ', this.value)"></label>'
+          + (rows.length > 1 ? '<button type="button" class="mini" onclick="removeCartela(' + index + ')">Remover</button>' : '<span></span>') + '</div>';
+        host.appendChild(line);
+      });
+      syncOrder();
+    }
+    function setDays(index, value) {
+      rows[index].days = Math.max(1, Math.min(365, Number.parseInt(value, 10) || 1));
+      renderRows();
+    }
+    function addCartela() {
+      rows.push({ days: ${JSON.stringify(product.durationDays)} });
+      renderRows();
+    }
+    function removeCartela(index) {
+      rows.splice(index, 1);
+      if (!rows.length) rows.push({ days: ${JSON.stringify(product.durationDays)} });
+      renderRows();
+    }
+    function syncOrder() {
+      document.getElementById("cartelasInput").value = JSON.stringify(rows);
+      document.getElementById("total").textContent = money.format(rows.reduce((sum, row) => sum + priceFor(row.days), 0));
+    }
+    renderRows();
+  </script>
 </body>
 </html>`);
 }

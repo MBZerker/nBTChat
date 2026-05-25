@@ -17,8 +17,11 @@ import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
@@ -2424,13 +2427,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         backgroundImage.setAlpha(darkMode ? 0.34f : 0.42f);
         card.addView(backgroundImage, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
+                dp(230)
         ));
         View overlay = new View(this);
         overlay.setBackgroundColor(color(darkMode ? "#AA101820" : "#DDF7F8F5"));
         card.addView(overlay, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
+                dp(230)
         ));
 
         LinearLayout item = vertical();
@@ -4452,8 +4455,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private void updateChatHeaderStatus() {
         String presence = contactPresenceStatus(currentRemoteAddress);
-        if (chatAvatarFrame != null) {
-            chatAvatarFrame.setBackground(ovalStroke(surface(), presenceColor(presence), dp(4)));
+        LoadingRingView ring = statusRingView(chatAvatarFrame);
+        if (ring != null) {
+            ring.setRingColor(color(presenceColor(presence)));
         }
         if (chatConnectionIcon != null) {
             chatConnectionIcon.setImageResource(presenceDrawable(presence));
@@ -4468,6 +4472,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             chatAvatarSpinning = false;
             return;
         }
+        LoadingRingView ring = statusRingView(chatAvatarFrame);
+        if (ring == null) {
+            chatAvatarSpinning = false;
+            return;
+        }
         boolean shouldSpin = "chat".equals(currentScreen)
                 && currentRemoteAddress != null
                 && !currentRemoteAddress.isEmpty()
@@ -4478,21 +4487,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             spinChatAvatarFrame();
         } else if (!shouldSpin && chatAvatarSpinning) {
             chatAvatarSpinning = false;
-            chatAvatarFrame.animate().cancel();
-            chatAvatarFrame.setRotation(0f);
+            ring.animate().cancel();
+            ring.setRotation(0f);
         }
     }
 
     private void spinChatAvatarFrame() {
-        if (!chatAvatarSpinning || chatAvatarFrame == null) {
+        LoadingRingView ring = statusRingView(chatAvatarFrame);
+        if (!chatAvatarSpinning || ring == null) {
             return;
         }
-        chatAvatarFrame.animate()
+        ring.animate()
                 .rotationBy(360f)
                 .setDuration(1200L)
                 .setInterpolator(new LinearInterpolator())
                 .withEndAction(this::spinChatAvatarFrame)
                 .start();
+    }
+
+    private LoadingRingView statusRingView(FrameLayout frame) {
+        View view = frame == null ? null : frame.findViewWithTag("statusRing");
+        return view instanceof LoadingRingView ? (LoadingRingView) view : null;
     }
 
     private void updateChatHeaderProfile() {
@@ -6003,11 +6018,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private FrameLayout avatarStatusFrame(UserProfile profile, String presence, int size, int radius, int borderWidth, boolean badge, View.OnClickListener clickListener) {
         FrameLayout frame = new FrameLayout(this);
-        frame.setPadding(borderWidth, borderWidth, borderWidth, borderWidth);
-        frame.setBackground(ovalStroke(surface(), presenceColor(presence), borderWidth));
+        LoadingRingView ring = new LoadingRingView(this, borderWidth);
+        ring.setTag("statusRing");
+        ring.setRingColor(color(presenceColor(presence)));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            frame.setClipToOutline(true);
+            ring.setClipToOutline(true);
         }
+        frame.addView(ring, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
         ImageView avatar = new ImageView(this);
         applyAvatar(avatar, profile);
         avatar.setBackground(ovalStroke(surfaceAlt(), surfaceAlt(), dp(1)));
@@ -6019,8 +6039,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             frame.setOnClickListener(clickListener);
         }
         frame.addView(avatar, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
+                size - (borderWidth * 2),
+                size - (borderWidth * 2),
+                Gravity.CENTER
         ));
         if (badge) {
             ImageView status = new ImageView(this);
@@ -6120,6 +6141,41 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     return handleComposerContentUri(inputContentInfo.getContentUri());
                 }
             };
+        }
+    }
+
+    private final class LoadingRingView extends View {
+        private final Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint arcPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF bounds = new RectF();
+        private final int strokeWidth;
+        private int ringColor = color("#9CA3AF");
+
+        LoadingRingView(Context context, int strokeWidth) {
+            super(context);
+            this.strokeWidth = Math.max(1, strokeWidth);
+            basePaint.setStyle(Paint.Style.STROKE);
+            basePaint.setStrokeWidth(this.strokeWidth);
+            basePaint.setStrokeCap(Paint.Cap.ROUND);
+            arcPaint.setStyle(Paint.Style.STROKE);
+            arcPaint.setStrokeWidth(this.strokeWidth);
+            arcPaint.setStrokeCap(Paint.Cap.ROUND);
+        }
+
+        void setRingColor(int value) {
+            ringColor = value;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float inset = strokeWidth / 2f + 1f;
+            bounds.set(inset, inset, getWidth() - inset, getHeight() - inset);
+            basePaint.setColor(adjustAlpha(ringColor, 0.28f));
+            arcPaint.setColor(ringColor);
+            canvas.drawOval(bounds, basePaint);
+            canvas.drawArc(bounds, -70f, 96f, false, arcPaint);
         }
     }
 
@@ -6555,6 +6611,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private int color(String value) {
         return Color.parseColor(value);
+    }
+
+    private int adjustAlpha(int color, float factor) {
+        int alpha = Math.round(Color.alpha(color) * Math.max(0f, Math.min(1f, factor)));
+        return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color));
     }
 
     private String background() {
