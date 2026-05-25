@@ -423,6 +423,9 @@ export default {
       if (request.method === "POST" && url.pathname === "/cartela/confirm") {
         return confirmCartelaNumber(request, env);
       }
+      if (request.method === "POST" && url.pathname === "/cartela/rename-choice") {
+        return renameCartelaChoice(request, env);
+      }
       if (request.method === "POST" && url.pathname === "/cartela/delete-choice") {
         return deleteCartelaChoice(request, env);
       }
@@ -737,6 +740,7 @@ async function chooseCartelaNumber(request, env) {
     taken.chooserName = chooserName || taken.chooserName || "Contato";
     taken.reserved = !!data.reserved && !taken.confirmed && !!cartela.allowReservations;
     taken.reservationExpiresAt = taken.reserved ? Date.now() + clampInt(cartela.reservationHours, 24, 1, 168) * 60 * 60 * 1000 : 0;
+    taken.removed = false;
     taken.updatedAt = Date.now();
   } else {
     const reserved = !!data.reserved;
@@ -751,6 +755,7 @@ async function chooseCartelaNumber(request, env) {
       confirmed: false,
       reserved,
       reservationExpiresAt: reserved ? Date.now() + clampInt(cartela.reservationHours, 24, 1, 168) * 60 * 60 * 1000 : 0,
+      removed: false,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
@@ -785,7 +790,37 @@ async function confirmCartelaNumber(request, env) {
   if (choice.confirmed) {
     choice.reserved = false;
     choice.reservationExpiresAt = 0;
+    choice.removed = false;
   }
+  choice.updatedAt = Date.now();
+  cartela.updatedAt = Date.now();
+  await writeCartela(env, cartela);
+  return json({ ok: true, cartela: publicCartela(cartela) });
+}
+
+async function renameCartelaChoice(request, env) {
+  const data = await readBody(request);
+  const tableId = clean(data.tableId);
+  const ownerDeviceId = clean(data.ownerDeviceId);
+  const chooserDeviceId = clean(data.chooserDeviceId);
+  const chooserName = clean(data.chooserName);
+  const number = Number.parseInt(data.number, 10);
+  if (!tableId || !ownerDeviceId || !chooserDeviceId || number < 1 || number > 100 || !chooserName) {
+    return json({ error: "invalid_rename" }, 400);
+  }
+  const cartela = await readCartela(env, tableId);
+  if (!cartela.tableId) {
+    return json({ error: "cartela_not_found" }, 404);
+  }
+  if (cartela.ownerDeviceId !== ownerDeviceId) {
+    return json({ error: "owner_mismatch" }, 403);
+  }
+  cartela.choices = Array.isArray(cartela.choices) ? cartela.choices : [];
+  const choice = cartela.choices.find((item) => item.chooserDeviceId === chooserDeviceId && Number(item.number) === number);
+  if (!choice) {
+    return json({ error: "choice_not_found" }, 404);
+  }
+  choice.chooserName = chooserName;
   choice.updatedAt = Date.now();
   cartela.updatedAt = Date.now();
   await writeCartela(env, cartela);
@@ -808,7 +843,21 @@ async function deleteCartelaChoice(request, env) {
   if (cartela.ownerDeviceId !== ownerDeviceId) {
     return json({ error: "owner_mismatch" }, 403);
   }
-  cartela.choices = cleanupExpiredChoices(cartela).filter((item) => !(item.chooserDeviceId === chooserDeviceId && Number(item.number) === number));
+  const permanent = !!data.permanent;
+  cartela.choices = cleanupExpiredChoices(cartela);
+  if (permanent) {
+    cartela.choices = cartela.choices.filter((item) => !(item.chooserDeviceId === chooserDeviceId && Number(item.number) === number));
+  } else {
+    const choice = cartela.choices.find((item) => item.chooserDeviceId === chooserDeviceId && Number(item.number) === number);
+    if (!choice) {
+      return json({ error: "choice_not_found" }, 404);
+    }
+    choice.confirmed = false;
+    choice.reserved = false;
+    choice.reservationExpiresAt = 0;
+    choice.removed = true;
+    choice.updatedAt = Date.now();
+  }
   cartela.updatedAt = Date.now();
   await writeCartela(env, cartela);
   return json({ ok: true, cartela: publicCartela(cartela) });
@@ -851,8 +900,9 @@ function publicCartela(cartela) {
       chooserName: choice.chooserName || "Contato",
       number: Number(choice.number) || 0,
       confirmed: !!choice.confirmed,
-      reserved: !!choice.reserved && !choice.confirmed,
-      reservationExpiresAt: choice.confirmed ? 0 : Number(choice.reservationExpiresAt) || 0,
+      reserved: !!choice.reserved && !choice.confirmed && !choice.removed,
+      reservationExpiresAt: choice.confirmed || choice.removed ? 0 : Number(choice.reservationExpiresAt) || 0,
+      removed: !!choice.removed,
       updatedAt: choice.updatedAt || choice.createdAt || 0,
     })),
     updatedAt: cartela.updatedAt || 0,

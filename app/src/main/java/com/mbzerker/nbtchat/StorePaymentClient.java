@@ -104,12 +104,27 @@ public final class StorePaymentClient {
     }
 
     public CartelaState deleteCartelaChoice(String tableId, String ownerDeviceId, String chooserDeviceId, int number) throws Exception {
+        return deleteCartelaChoice(tableId, ownerDeviceId, chooserDeviceId, number, false);
+    }
+
+    public CartelaState deleteCartelaChoice(String tableId, String ownerDeviceId, String chooserDeviceId, int number, boolean permanent) throws Exception {
         JSONObject body = new JSONObject();
         body.put("tableId", tableId == null ? "" : tableId);
         body.put("ownerDeviceId", ownerDeviceId == null ? "" : ownerDeviceId);
         body.put("chooserDeviceId", chooserDeviceId == null ? "" : chooserDeviceId);
         body.put("number", number);
+        body.put("permanent", permanent);
         return CartelaState.fromJson(post("/cartela/delete-choice", body).optJSONObject("cartela"));
+    }
+
+    public CartelaState renameCartelaChoice(String tableId, String ownerDeviceId, String chooserDeviceId, int number, String chooserName) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("tableId", tableId == null ? "" : tableId);
+        body.put("ownerDeviceId", ownerDeviceId == null ? "" : ownerDeviceId);
+        body.put("chooserDeviceId", chooserDeviceId == null ? "" : chooserDeviceId);
+        body.put("number", number);
+        body.put("chooserName", chooserName == null ? "" : chooserName);
+        return CartelaState.fromJson(post("/cartela/rename-choice", body).optJSONObject("cartela"));
     }
 
     private JSONObject request(String path) throws Exception {
@@ -270,7 +285,8 @@ public final class StorePaymentClient {
                             item.optInt("number", 0),
                             item.optBoolean("confirmed", false),
                             item.optBoolean("reserved", false),
-                            item.optLong("reservationExpiresAt", 0L)
+                            item.optLong("reservationExpiresAt", 0L),
+                            item.optBoolean("removed", false)
                     ));
                 }
             }
@@ -296,14 +312,16 @@ public final class StorePaymentClient {
         public final boolean confirmed;
         public final boolean reserved;
         public final long reservationExpiresAt;
+        public final boolean removed;
 
-        CartelaChoice(String chooserDeviceId, String chooserName, int number, boolean confirmed, boolean reserved, long reservationExpiresAt) {
+        CartelaChoice(String chooserDeviceId, String chooserName, int number, boolean confirmed, boolean reserved, long reservationExpiresAt, boolean removed) {
             this.chooserDeviceId = chooserDeviceId == null ? "" : chooserDeviceId;
             this.chooserName = chooserName == null ? "" : chooserName;
             this.number = number;
-            this.confirmed = confirmed;
-            this.reserved = reserved && !confirmed;
-            this.reservationExpiresAt = confirmed ? 0L : reservationExpiresAt;
+            this.removed = removed;
+            this.confirmed = confirmed && !removed;
+            this.reserved = reserved && !confirmed && !removed;
+            this.reservationExpiresAt = confirmed || removed ? 0L : reservationExpiresAt;
         }
     }
 }

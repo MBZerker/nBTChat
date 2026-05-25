@@ -3851,28 +3851,64 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return container;
         }
 
+        Map<String, Integer> nameCounts = new HashMap<>();
+        Map<String, Integer> nameIndexes = new HashMap<>();
+        for (GadgetStore.Table100Choice choice : choices) {
+            String base = table100ChoiceBaseName(choice);
+            nameCounts.put(base, nameCounts.containsKey(base) ? nameCounts.get(base) + 1 : 1);
+        }
+
         boolean anyPending = false;
         for (GadgetStore.Table100Choice choice : choices) {
-            if (!choice.confirmed) {
+            if (!choice.confirmed && !choice.removed) {
                 if (!anyPending) {
                     container.addView(text("Pendentes", 13, secondary(), Typeface.BOLD), topMargin(dp(12)));
                     anyPending = true;
                 }
-                container.addView(table100ChoiceRow(payload, choice), topMargin(dp(8)));
+                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes)), topMargin(dp(8)));
             }
         }
 
         boolean anyConfirmed = false;
         for (GadgetStore.Table100Choice choice : choices) {
-            if (choice.confirmed) {
+            if (choice.confirmed && !choice.removed) {
                 if (!anyConfirmed) {
                     container.addView(text("Confirmados", 13, secondary(), Typeface.BOLD), topMargin(dp(14)));
                     anyConfirmed = true;
                 }
-                container.addView(table100ChoiceRow(payload, choice), topMargin(dp(8)));
+                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes)), topMargin(dp(8)));
+            }
+        }
+
+        boolean anyRemoved = false;
+        for (GadgetStore.Table100Choice choice : choices) {
+            if (choice.removed) {
+                if (!anyRemoved) {
+                    container.addView(text("Removidos", 13, secondary(), Typeface.BOLD), topMargin(dp(14)));
+                    anyRemoved = true;
+                }
+                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes)), topMargin(dp(8)));
             }
         }
         return container;
+    }
+
+    private String table100ChoiceBaseName(GadgetStore.Table100Choice choice) {
+        if (choice == null) {
+            return "Contato";
+        }
+        UserProfile profile = profileStore.loadContact(choice.address);
+        return safeName(profile.isComplete() ? profile.getDisplayName() : (choice.name.isEmpty() ? "Contato" : choice.name), "Contato");
+    }
+
+    private String table100ChoiceDisplayName(GadgetStore.Table100Choice choice, Map<String, Integer> counts, Map<String, Integer> indexes) {
+        String base = table100ChoiceBaseName(choice);
+        if (counts == null || !counts.containsKey(base) || counts.get(base) <= 1) {
+            return base;
+        }
+        int index = indexes.containsKey(base) ? indexes.get(base) + 1 : 1;
+        indexes.put(base, index);
+        return base + "(" + index + ")";
     }
 
     private boolean table100HasLocalChoice(GadgetStore.Table100Payload payload) {
@@ -3914,6 +3950,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String table100ChoiceStateLabel(GadgetStore.Table100Choice choice) {
         if (choice.confirmed) {
             return "confirmado";
+        }
+        if (choice.removed) {
+            return "removido, em analise";
         }
         if (choice.reserved) {
             return "reservado, em analise";
@@ -3981,21 +4020,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .show();
     }
 
-    private View table100ChoiceRow(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice) {
+    private View table100ChoiceRow(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String displayName) {
         LinearLayout row = horizontal();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(10), dp(10));
         row.setBackground(rounded(surfaceAlt(), dp(12), border()));
 
-        UserProfile profile = profileStore.loadContact(choice.address);
-        String name = profile.isComplete() ? profile.getDisplayName() : (choice.name.isEmpty() ? "Contato" : choice.name);
-        TextView label = text(safeName(name, "Contato") + " - numero " + choice.number, 15, primary(), Typeface.BOLD);
+        String name = safeName(displayName, "Contato");
+        TextView label = text(name + " - numero " + choice.number, 15, choice.removed ? secondary() : primary(), Typeface.BOLD);
         label.setSingleLine(true);
         label.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(label, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         Switch toggle = new Switch(this);
         toggle.setChecked(choice.confirmed);
+        toggle.setEnabled(!choice.removed);
         toggle.setOnClickListener(v -> {
             boolean target = toggle.isChecked();
             String action = target ? "confirmar" : "remover a confirmacao de";
@@ -4013,21 +4052,78 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         });
         row.addView(toggle);
         row.setOnLongClickListener(v -> {
-            confirmDeleteTable100Choice(payload, choice, safeName(name, "Contato"));
+            showTable100ChoiceActions(payload, choice, safeName(name, "Contato"));
             return true;
         });
         return row;
     }
 
+    private void showTable100ChoiceActions(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String name) {
+        List<String> actions = new ArrayList<>();
+        actions.add("Editar nome");
+        actions.add(choice.removed ? "Excluir permanentemente" : "Remover");
+        new AlertDialog.Builder(this)
+                .setTitle(name + " - numero " + choice.number)
+                .setItems(actions.toArray(new String[0]), (dialog, which) -> {
+                    String action = actions.get(which);
+                    if ("Editar nome".equals(action)) {
+                        showRenameTable100ChoiceDialog(payload, choice, name);
+                    } else if (choice.removed) {
+                        confirmPermanentDeleteTable100Choice(payload, choice, name);
+                    } else {
+                        confirmDeleteTable100Choice(payload, choice, name);
+                    }
+                })
+                .show();
+    }
+
+    private void showRenameTable100ChoiceDialog(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String name) {
+        EditText input = input("Nome");
+        input.setSingleLine(true);
+        input.setText(table100ChoiceBaseName(choice));
+        input.setSelectAllOnFocus(true);
+        int padding = dp(18);
+        input.setPadding(padding, input.getPaddingTop(), padding, input.getPaddingBottom());
+        new AlertDialog.Builder(this)
+                .setTitle("Editar nome")
+                .setView(input)
+                .setPositiveButton("Salvar", (dialog, which) -> {
+                    String newName = input.getText().toString().trim();
+                    if (newName.isEmpty()) {
+                        Toast.makeText(this, "Informe um nome.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    gadgetStore.renameChoice(payload.tableId, choice.address, choice.number, newName);
+                    renameTable100ChoiceOnline(payload, choice.address, choice.number, newName);
+                    refreshTable100PlayScreen();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
     private void confirmDeleteTable100Choice(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String name) {
         new AlertDialog.Builder(this)
                 .setTitle("Remover participante?")
-                .setMessage("Remova apenas em caso de desistencia, erro ou ausencia de confirmacao dentro do prazo. Esta acao libera o numero " + choice.number + " para outra pessoa, mesmo que o participante tenha feito combinados fora do app.")
+                .setMessage("O participante ira para a categoria Removidos e o numero " + choice.number + " continuara bloqueado com ampulheta. Para liberar o numero, exclua o registro permanentemente em Removidos.")
                 .setPositiveButton("Remover", (dialog, which) -> {
-                    gadgetStore.removeChoice(payload.tableId, choice.address, choice.number);
-                    deleteTable100ChoiceOnline(payload, choice.address, choice.number);
+                    gadgetStore.markChoiceRemoved(payload.tableId, choice.address, choice.number, true);
+                    deleteTable100ChoiceOnline(payload, choice.address, choice.number, false);
                     refreshTable100PlayScreen();
                     Toast.makeText(this, name + " removido.", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void confirmPermanentDeleteTable100Choice(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String name) {
+        new AlertDialog.Builder(this)
+                .setTitle("Excluir permanentemente?")
+                .setMessage("Esta acao remove " + name + " da categoria Removidos e libera o numero " + choice.number + " para nova escolha.")
+                .setPositiveButton("Excluir", (dialog, which) -> {
+                    gadgetStore.removeChoice(payload.tableId, choice.address, choice.number);
+                    deleteTable100ChoiceOnline(payload, choice.address, choice.number, true);
+                    refreshTable100PlayScreen();
+                    Toast.makeText(this, "Registro excluido.", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Cancelar", null)
                 .show();
@@ -4116,14 +4212,32 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }, "nBTChat-cartela-confirm").start();
     }
 
-    private void deleteTable100ChoiceOnline(GadgetStore.Table100Payload payload, String chooserDeviceId, int number) {
+    private void renameTable100ChoiceOnline(GadgetStore.Table100Payload payload, String chooserDeviceId, int number, String name) {
         if (storePaymentClient == null || payload == null || payload.tableId.isEmpty()) {
             return;
         }
         String ownerDeviceId = StoreDeviceId.get(this);
         new Thread(() -> {
             try {
-                StorePaymentClient.CartelaState state = storePaymentClient.deleteCartelaChoice(payload.tableId, ownerDeviceId, chooserDeviceId, number);
+                StorePaymentClient.CartelaState state = storePaymentClient.renameCartelaChoice(payload.tableId, ownerDeviceId, chooserDeviceId, number, name);
+                boolean changed = gadgetStore.mergeOnlineCartela(state);
+                if (changed) {
+                    runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                }
+            } catch (Exception ex) {
+                runOnUiThread(() -> Toast.makeText(this, "Nome salvo localmente. Vou sincronizar quando possivel.", Toast.LENGTH_LONG).show());
+            }
+        }, "nBTChat-cartela-rename").start();
+    }
+
+    private void deleteTable100ChoiceOnline(GadgetStore.Table100Payload payload, String chooserDeviceId, int number, boolean permanent) {
+        if (storePaymentClient == null || payload == null || payload.tableId.isEmpty()) {
+            return;
+        }
+        String ownerDeviceId = StoreDeviceId.get(this);
+        new Thread(() -> {
+            try {
+                StorePaymentClient.CartelaState state = storePaymentClient.deleteCartelaChoice(payload.tableId, ownerDeviceId, chooserDeviceId, number, permanent);
                 boolean changed = gadgetStore.mergeOnlineCartela(state);
                 if (changed) {
                     runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));

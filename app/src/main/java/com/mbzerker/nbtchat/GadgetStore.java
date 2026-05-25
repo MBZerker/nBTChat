@@ -188,7 +188,7 @@ public final class GadgetStore {
             for (StorePaymentClient.CartelaChoice choice : state.choices) {
                 if (choice.number >= 1 && choice.number <= 100 && !choice.chooserDeviceId.trim().isEmpty()) {
                     merged.put(choiceJson(state.tableId, choice.chooserDeviceId, choice.number, choice.chooserName,
-                            choice.confirmed, choice.reserved, choice.reservationExpiresAt));
+                            choice.confirmed, choice.reserved, choice.reservationExpiresAt, choice.removed));
                 }
             }
             String after = merged.toString();
@@ -221,6 +221,10 @@ public final class GadgetStore {
     }
 
     public void saveChoice(String tableId, String address, int number, String name, boolean confirmed, boolean reserved, long reservationExpiresAt) {
+        saveChoice(tableId, address, number, name, confirmed, reserved, reservationExpiresAt, false);
+    }
+
+    public void saveChoice(String tableId, String address, int number, String name, boolean confirmed, boolean reserved, long reservationExpiresAt, boolean removed) {
         if (tableId == null || tableId.trim().isEmpty() || address == null || address.trim().isEmpty() || number < 1 || number > 100) {
             return;
         }
@@ -236,19 +240,20 @@ public final class GadgetStore {
                     item.put("confirmed", confirmed);
                     item.put("reserved", reserved && !confirmed);
                     item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
+                    item.put("removed", removed);
                     changed = true;
                     break;
                 }
             }
             if (!changed) {
-                items.put(choiceJson(tableId, address, number, name, confirmed, reserved, reservationExpiresAt));
+                items.put(choiceJson(tableId, address, number, name, confirmed, reserved, reservationExpiresAt, removed));
             }
             prefs.edit().putString(KEY_TABLE_100_CHOICES, items.toString()).apply();
         } catch (JSONException ignored) {
         }
     }
 
-    private JSONObject choiceJson(String tableId, String address, int number, String name, boolean confirmed, boolean reserved, long reservationExpiresAt) throws JSONException {
+    private JSONObject choiceJson(String tableId, String address, int number, String name, boolean confirmed, boolean reserved, long reservationExpiresAt, boolean removed) throws JSONException {
         JSONObject item = new JSONObject();
         item.put("tableId", tableId);
         item.put("address", address);
@@ -257,6 +262,7 @@ public final class GadgetStore {
         item.put("confirmed", confirmed);
         item.put("reserved", reserved && !confirmed);
         item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
+        item.put("removed", removed);
         return item;
     }
 
@@ -273,6 +279,52 @@ public final class GadgetStore {
                         && number == item.optInt("number", -1)) {
                     item.put("confirmed", confirmed);
                     if (confirmed) {
+                        item.put("reserved", false);
+                        item.put("reservationExpiresAt", 0L);
+                        item.put("removed", false);
+                    }
+                    prefs.edit().putString(KEY_TABLE_100_CHOICES, items.toString()).apply();
+                    return;
+                }
+            }
+        } catch (JSONException ignored) {
+        }
+    }
+
+    public void renameChoice(String tableId, String address, int number, String name) {
+        if (tableId == null || address == null) {
+            return;
+        }
+        try {
+            JSONArray items = rawChoices();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                if (tableId.equals(item.optString("tableId", ""))
+                        && address.equals(item.optString("address", ""))
+                        && number == item.optInt("number", -1)) {
+                    item.put("name", clean(name));
+                    prefs.edit().putString(KEY_TABLE_100_CHOICES, items.toString()).apply();
+                    return;
+                }
+            }
+        } catch (JSONException ignored) {
+        }
+    }
+
+    public void markChoiceRemoved(String tableId, String address, int number, boolean removed) {
+        if (tableId == null || address == null) {
+            return;
+        }
+        try {
+            JSONArray items = rawChoices();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                if (tableId.equals(item.optString("tableId", ""))
+                        && address.equals(item.optString("address", ""))
+                        && number == item.optInt("number", -1)) {
+                    item.put("removed", removed);
+                    if (removed) {
+                        item.put("confirmed", false);
                         item.put("reserved", false);
                         item.put("reservationExpiresAt", 0L);
                     }
@@ -377,7 +429,8 @@ public final class GadgetStore {
                             item.optInt("number", 0),
                             item.optBoolean("confirmed", false),
                             item.optBoolean("reserved", false),
-                            item.optLong("reservationExpiresAt", 0L)
+                            item.optLong("reservationExpiresAt", 0L),
+                            item.optBoolean("removed", false)
                     ));
                 }
             }
@@ -517,18 +570,24 @@ public final class GadgetStore {
         public final boolean confirmed;
         public final boolean reserved;
         public final long reservationExpiresAt;
+        public final boolean removed;
 
         Table100Choice(String address, String name, int number, boolean confirmed) {
             this(address, name, number, confirmed, false, 0L);
         }
 
         Table100Choice(String address, String name, int number, boolean confirmed, boolean reserved, long reservationExpiresAt) {
+            this(address, name, number, confirmed, reserved, reservationExpiresAt, false);
+        }
+
+        Table100Choice(String address, String name, int number, boolean confirmed, boolean reserved, long reservationExpiresAt, boolean removed) {
             this.address = address == null ? "" : address;
             this.name = name == null ? "" : name;
             this.number = number;
-            this.confirmed = confirmed;
-            this.reserved = reserved && !confirmed;
-            this.reservationExpiresAt = confirmed ? 0L : reservationExpiresAt;
+            this.removed = removed;
+            this.confirmed = confirmed && !removed;
+            this.reserved = reserved && !confirmed && !removed;
+            this.reservationExpiresAt = confirmed || removed ? 0L : reservationExpiresAt;
         }
     }
 }
