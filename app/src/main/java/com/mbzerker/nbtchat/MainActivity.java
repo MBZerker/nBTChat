@@ -42,6 +42,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.Editable;
@@ -160,6 +161,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final long WAKE_THROTTLE_MS = 30_000L;
     private static final long PAIR_REPAIR_THROTTLE_MS = 5L * 60L * 1000L;
     private static final long UPDATE_CHECK_INTERVAL_MS = 60_000L;
+    private static final long SCANNER_DISCOVERY_BURST_MS = 25_000L;
+    private static final long SCANNER_DISCOVERY_REST_MS = 90_000L;
+    private static final long CONNECT_BACKOFF_MS = 15_000L;
+    private static final long OWNED_CARTELA_SYNC_INTERVAL_MS = 60_000L;
 
     private final Map<String, BtChatManager.DeviceCandidate> discoveredDevices = new LinkedHashMap<>();
     private final Map<String, TextView> receiptViews = new LinkedHashMap<>();
@@ -170,6 +175,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final Map<String, Long> lastWakeAttemptAt = new HashMap<>();
     private final Map<String, Long> lastPairRepairAt = new HashMap<>();
     private final Map<String, Long> lastCartelaSyncAt = new HashMap<>();
+    private final Map<String, Long> lastConnectAttemptAt = new HashMap<>();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
     private ProfileStore profileStore;
@@ -226,6 +232,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String updateVersionName = "";
     private String updatePageUrl = DOWNLOAD_PAGE_URL;
     private String updateApkUrl = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat.apk";
+    private String updateChangelog = "";
+    private String updateOrigin = "GitHub Pages oficial do nBTChat";
     private MediaPlayer playingVoicePlayer;
     private File playingVoiceFile;
     private String playingVoiceId = "";
@@ -233,6 +241,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private Runnable voiceTicker;
     private Runnable updateCheckRunnable;
     private Runnable table100AutoSyncRunnable;
+    private Runnable scannerDiscoveryRunnable;
+    private long lastOwnedCartelaSyncAt;
     private long lastDiscoverableRequestAt;
     private final Set<String> onlineAddresses = new HashSet<>();
     private final Map<String, String> contactPresence = new HashMap<>();
@@ -375,6 +385,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     @Override
     protected void onStop() {
         if (btChatManager != null && !isChangingConfigurations()) {
+            stopScannerDiscoveryCycle();
             btChatManager.stopDiscovery();
             btChatManager.stop();
         }
@@ -411,6 +422,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             tryStartBluetooth();
         }
         startPeriodicUpdateChecks(false);
+        syncOwnedCartelaIfUseful();
     }
 
     @Override
@@ -435,7 +447,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             tryStartBluetooth();
             if ("scanner".equals(currentScreen) && btChatManager != null && btChatManager.isBluetoothEnabled()) {
                 requestDiscoverableForScanner();
-                btChatManager.startNearbyDiscovery();
+                startScannerDiscoveryCycle();
             }
         } else if (requestCode == REQUEST_PROFILE_CAMERA
                 && grantResults.length > 0
@@ -783,7 +795,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         bluetoothEnablePromptShown = false;
         startOnlineService();
         if ("scanner".equals(currentScreen) && discoveredDevices.isEmpty()) {
-            btChatManager.startNearbyDiscovery();
+            startScannerDiscoveryCycle();
         }
     }
 
@@ -795,8 +807,43 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
+    private void startScannerDiscoveryCycle() {
+        stopScannerDiscoveryCycle();
+        if (btChatManager == null || !"scanner".equals(currentScreen)) {
+            return;
+        }
+        scannerDiscoveryRunnable = new Runnable() {
+            @Override
+            public void run() {
+                Runnable cycle = this;
+                if (!"scanner".equals(currentScreen) || btChatManager == null || !btChatManager.isBluetoothEnabled()) {
+                    scannerDiscoveryRunnable = null;
+                    return;
+                }
+                btChatManager.startNearbyDiscovery();
+                uiHandler.postDelayed(() -> {
+                    if (btChatManager != null) {
+                        btChatManager.stopDiscovery();
+                    }
+                    if ("scanner".equals(currentScreen) && scannerDiscoveryRunnable == cycle) {
+                        uiHandler.postDelayed(cycle, SCANNER_DISCOVERY_REST_MS);
+                    }
+                }, SCANNER_DISCOVERY_BURST_MS);
+            }
+        };
+        scannerDiscoveryRunnable.run();
+    }
+
+    private void stopScannerDiscoveryCycle() {
+        if (scannerDiscoveryRunnable != null) {
+            uiHandler.removeCallbacks(scannerDiscoveryRunnable);
+            scannerDiscoveryRunnable = null;
+        }
+    }
+
     private void showHomeScreen() {
         if (btChatManager != null) {
+            stopScannerDiscoveryCycle();
             btChatManager.stopDiscovery();
         }
         int contactCount = conversationCount();
@@ -919,6 +966,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showUpdatesScreen() {
+        stopScannerDiscoveryCycle();
         currentScreen = "updates";
         messageList = null;
 
@@ -1152,7 +1200,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             requestDiscoverableForScanner();
             discoveredDevices.clear();
             renderNearbyDeviceList();
-            btChatManager.startNearbyDiscovery();
+            startScannerDiscoveryCycle();
         });
         root.addView(scanButton, topMargin(dp(16)));
         root.addView(qrActionRow(), topMargin(dp(10)));
@@ -1184,7 +1232,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             renderNearbyDeviceList();
             root.postDelayed(() -> {
                 if (!requestMissingPermissions()) {
-                    btChatManager.startNearbyDiscovery();
+                    startScannerDiscoveryCycle();
                 }
             }, 200);
         } else {
@@ -1753,6 +1801,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private void showChatScreen(UserProfile profile, String fingerprint) {
         if (btChatManager != null) {
+            stopScannerDiscoveryCycle();
             btChatManager.stopDiscovery();
         }
         currentScreen = "chat";
@@ -2382,6 +2431,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showStoreScreen() {
+        stopScannerDiscoveryCycle();
+        syncOwnedCartelaIfUseful();
         currentScreen = "store";
         messageList = null;
 
@@ -2806,6 +2857,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 }
             }
         }, "nBTChat-cartela-register").start();
+    }
+
+    private void syncOwnedCartelaIfUseful() {
+        if (gadgetStore == null || storePaymentClient == null || !gadgetStore.hasTable100()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastOwnedCartelaSyncAt < OWNED_CARTELA_SYNC_INTERVAL_MS) {
+            return;
+        }
+        lastOwnedCartelaSyncAt = now;
+        GadgetStore.Table100Payload payload = gadgetStore.table100Payload();
+        if (payload == null || payload.tableId.isEmpty()) {
+            return;
+        }
+        registerCartelaOnline(false);
+        syncCartelaOnline(payload, false);
     }
 
     private void syncCartelaOnline(GadgetStore.Table100Payload payload, boolean showFeedback) {
@@ -3272,6 +3340,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void connectForAddress(String address) {
         BtChatManager.DeviceCandidate target = btChatManager.getPairedCandidate(address);
         if (target != null && !btChatManager.isConnectedTo(address)) {
+            long now = System.currentTimeMillis();
+            long last = lastConnectAttemptAt.containsKey(address) ? lastConnectAttemptAt.get(address) : 0L;
+            if (now - last < CONNECT_BACKOFF_MS) {
+                return;
+            }
+            lastConnectAttemptAt.put(address, now);
             btChatManager.connect(target);
         } else if (target == null) {
             tryWakeAddress(address);
@@ -4837,6 +4911,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         UserProfile profileValue = profile == null ? UserProfile.empty() : profile;
         String fingerprintValue = fingerprint == null ? "" : fingerprint;
+        lastConnectAttemptAt.remove(address);
         onlineAddresses.add(address);
         contactPresence.put(address, AppSettingsStore.PRESENCE_ONLINE);
         profileStore.saveContact(address, profileValue);
@@ -5772,12 +5847,84 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showUpdateDialog() {
+        StringBuilder message = new StringBuilder();
+        if (updateVersionName.isEmpty()) {
+            message.append("Uma nova versao do nBTChat esta pronta.");
+        } else {
+            message.append("Versao ").append(updateVersionName).append(" disponivel.");
+        }
+        if (!updateChangelog.trim().isEmpty()) {
+            message.append("\n\nNovidades:\n").append(updateChangelog.trim());
+        }
+        message.append("\n\nOrigem: ").append(updateOrigin == null || updateOrigin.trim().isEmpty()
+                ? "fonte oficial do nBTChat"
+                : updateOrigin.trim());
         new AlertDialog.Builder(this)
                 .setTitle("Atualizacao disponivel")
-                .setMessage(updateVersionName.isEmpty() ? "Uma nova versao do nBTChat esta pronta para baixar." : "Versao " + updateVersionName + " disponivel.")
-                .setPositiveButton("Baixar APK", (dialog, which) -> openExternalLink(Uri.parse(updateApkUrl)))
+                .setMessage(message.toString())
+                .setPositiveButton("Baixar e instalar", (dialog, which) -> downloadAndInstallUpdateApk())
+                .setNeutralButton("Abrir pagina", (dialog, which) -> openExternalLink(Uri.parse(updatePageUrl)))
                 .setNegativeButton("Agora nao", null)
                 .show();
+    }
+
+    private void downloadAndInstallUpdateApk() {
+        Toast.makeText(this, "Baixando atualizacao...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL(updateApkUrl);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(10_000);
+                connection.setReadTimeout(20_000);
+                int code = connection.getResponseCode();
+                if (code < 200 || code >= 300) {
+                    throw new Exception("Servidor respondeu " + code);
+                }
+                File dir = new File(getCacheDir(), "backups");
+                if (!dir.exists() && !dir.mkdirs()) {
+                    throw new Exception("Nao foi possivel preparar o download.");
+                }
+                File apk = new File(dir, "nBTChat-update.apk");
+                byte[] buffer = new byte[8192];
+                try (InputStream input = connection.getInputStream();
+                     FileOutputStream output = new FileOutputStream(apk)) {
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        output.write(buffer, 0, read);
+                    }
+                }
+                runOnUiThread(() -> installDownloadedUpdate(apk));
+            } catch (Exception ex) {
+                runOnUiThread(() -> Toast.makeText(this, "Nao foi possivel baixar a atualizacao.", Toast.LENGTH_LONG).show());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        }, "nBTChat-apk-download").start();
+    }
+
+    private void installDownloadedUpdate(File apk) {
+        if (apk == null || !apk.exists()) {
+            Toast.makeText(this, "APK de atualizacao nao encontrado.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+            Toast.makeText(this, "Autorize o nBTChat a instalar atualizacoes e toque em baixar novamente.", Toast.LENGTH_LONG).show();
+            Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+            startActivity(settings);
+            return;
+        }
+        Uri uri = BackupFileProvider.uriFor(this, apk);
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setDataAndType(uri, "application/vnd.android.package-archive");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(intent);
+        } catch (Exception ex) {
+            Toast.makeText(this, "Nao encontrei o instalador do Android.", Toast.LENGTH_LONG).show();
+        }
     }
 
     private void startPeriodicUpdateChecks(boolean checkNow) {
@@ -5822,6 +5969,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     String latestName = json.optString("versionName", "");
                     String pageUrl = json.optString("pageUrl", updatePageUrl);
                     String apkUrl = json.optString("apkUrl", updateApkUrl);
+                    String changelog = json.optString("changelog", "");
+                    String origin = json.optString("origin", "GitHub Pages oficial do nBTChat");
                     boolean critical = json.optBoolean("critical", false);
                     int currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
                     runOnUiThread(() -> {
@@ -5829,6 +5978,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         updateVersionName = latestName;
                         updatePageUrl = pageUrl;
                         updateApkUrl = apkUrl;
+                        updateChangelog = changelog;
+                        updateOrigin = origin;
                         if (updateAvailable && critical && settingsStore.shouldNotifyCriticalUpdate(latestName)) {
                             NotificationHelper.showCriticalUpdateNotification(this, latestName, updateApkUrl);
                         }
