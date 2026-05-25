@@ -2526,11 +2526,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, "Nao foi possivel criar o link.", Toast.LENGTH_LONG).show();
             return;
         }
+        copyToClipboard(url, false);
         Intent intent = new Intent(Intent.ACTION_SEND);
         intent.setType("text/plain");
         intent.putExtra(Intent.EXTRA_SUBJECT, GadgetStore.TABLE_100_TITLE);
         intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + url);
         startActivity(Intent.createChooser(intent, "Compartilhar item"));
+        Toast.makeText(this, "Link copiado.", Toast.LENGTH_SHORT).show();
     }
 
     private String buildStoreShareUrl(String kind, String body, ContactCardPayload contact) {
@@ -4884,15 +4886,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         List<String> actions = new ArrayList<>();
-        actions.add("Copiar");
-        actions.add("Compartilhar");
+        if (MessageStore.KIND_TABLE_100.equals(message.kind)) {
+            actions.add("Abrir");
+            actions.add("Compartilhar");
+            actions.add("Compartilhar link");
+        } else {
+            actions.add("Copiar");
+            actions.add("Compartilhar");
+        }
         actions.add("Remover");
         actions.add("Responder");
         new AlertDialog.Builder(this)
                 .setTitle("Mensagem selecionada")
                 .setItems(actions.toArray(new String[0]), (dialog, which) -> {
                     String action = actions.get(which);
-                    if ("Copiar".equals(action)) {
+                    if ("Abrir".equals(action)) {
+                        showTable100PlayScreen(message.body);
+                    } else if ("Copiar".equals(action)) {
                         if (message.body != null && !message.body.trim().isEmpty()) {
                             copyMessageText(message.body);
                         } else {
@@ -4900,6 +4910,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         }
                     } else if ("Compartilhar".equals(action)) {
                         showInternalShareChooser(message);
+                    } else if ("Compartilhar link".equals(action)) {
+                        shareMessageExternalLink(message);
                     } else if ("Remover".equals(action)) {
                         showRemoveMessageDialog(message);
                     } else if ("Responder".equals(action)) {
@@ -5029,6 +5041,31 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if ("home".equals(currentScreen)) {
             renderContactList();
         }
+    }
+
+    private void shareMessageExternalLink(MessageStore.ChatMessage source) {
+        if (source == null || !MessageStore.KIND_TABLE_100.equals(source.kind)) {
+            Toast.makeText(this, "Esta mensagem nao pode virar link externo.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        ContactCardPayload contact = localContactCardPayload();
+        if (contact == null) {
+            Toast.makeText(this, "Configure seu perfil antes de compartilhar link.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        String body = table100BodyWithKnownLocks(source.body == null ? "" : source.body);
+        String url = buildStoreShareUrl(source.kind, body, contact);
+        if (url.isEmpty()) {
+            Toast.makeText(this, "Nao foi possivel criar o link.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        copyToClipboard(url, false);
+        Intent intent = new Intent(Intent.ACTION_SEND);
+        intent.setType("text/plain");
+        intent.putExtra(Intent.EXTRA_SUBJECT, GadgetStore.TABLE_100_TITLE);
+        intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + url);
+        startActivity(Intent.createChooser(intent, "Compartilhar link"));
+        Toast.makeText(this, "Link copiado.", Toast.LENGTH_SHORT).show();
     }
 
     private void showUpdateDialog() {
