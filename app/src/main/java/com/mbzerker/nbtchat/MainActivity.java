@@ -2573,12 +2573,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         payload.allowReservations,
                         payload.reservationHours
                 );
-                gadgetStore.mergeOnlineCartela(state);
+                boolean changed = gadgetStore.mergeOnlineCartela(state);
                 runOnUiThread(() -> {
                     if (showFeedback) {
                         Toast.makeText(this, "Cartela sincronizada pela internet.", Toast.LENGTH_SHORT).show();
                     }
-                    refreshTable100IfOpen(payload.tableId);
+                    if (changed) {
+                        refreshTable100IfOpen(payload.tableId);
+                    }
                 });
             } catch (Exception ex) {
                 if (showFeedback) {
@@ -2602,13 +2604,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         new Thread(() -> {
             try {
                 StorePaymentClient.CartelaState state = storePaymentClient.getCartelaState(payload.tableId);
-                gadgetStore.mergeOnlineCartela(state);
+                boolean changed = gadgetStore.mergeOnlineCartela(state);
                 runOnUiThread(() -> {
                     cartelaOnlineSyncInProgress = false;
                     if (showFeedback) {
                         Toast.makeText(this, "Cartela atualizada.", Toast.LENGTH_SHORT).show();
                     }
-                    refreshTable100IfOpen(payload.tableId);
+                    if (changed) {
+                        refreshTable100IfOpen(payload.tableId);
+                    }
                 });
             } catch (Exception ex) {
                 runOnUiThread(() -> {
@@ -3671,6 +3675,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         grid.setPadding(0, dp(4), 0, 0);
         int available = Math.max(dp(280), getResources().getDisplayMetrics().widthPixels - dp(56));
         int cellSize = fullScreen ? Math.max(dp(29), Math.min(dp(42), available / 10 - dp(4))) : dp(40);
+        Map<Integer, Integer> numberStatuses = table100NumberStatuses(payload);
         for (int i = 1; i <= 100; i++) {
             final int number = i;
             Button cell = new Button(this);
@@ -3682,9 +3687,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             cell.setMinHeight(0);
             cell.setMinimumHeight(0);
             cell.setPadding(0, 0, 0, 0);
-            int status = table100NumberStatus(payload, number, owner);
+            int status = table100NumberStatus(numberStatuses, number);
             setCellTextForStatus(cell, status, number, fullScreen, mine);
-            String fill = table100CellColor(payload, number, owner, fullScreen, mine);
+            String fill = table100CellColor(number, status, fullScreen, mine);
             String stroke = fullScreen ? "#BBF7D0" : (mine ? "#7DD3FC" : border());
             cell.setBackground(rounded(fill, dp(fullScreen ? 12 : 8), stroke));
             cell.setOnClickListener(v -> showTable100NumberDialog(number, payload, owner));
@@ -3697,8 +3702,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return grid;
     }
 
-    private String table100CellColor(GadgetStore.Table100Payload payload, int number, boolean owner, boolean fullScreen, boolean mine) {
-        int status = table100NumberStatus(payload, number, owner);
+    private String table100CellColor(int number, int status, boolean fullScreen, boolean mine) {
         if (status != 0) {
             return darkMode ? "#4B5563" : "#9CA3AF";
         }
@@ -3721,17 +3725,31 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "#EA580C";
     }
 
-    private int table100NumberStatus(GadgetStore.Table100Payload payload, int number, boolean owner) {
+    private Map<Integer, Integer> table100NumberStatuses(GadgetStore.Table100Payload payload) {
+        Map<Integer, Integer> statuses = new HashMap<>();
         if (payload == null || payload.tableId.isEmpty()) {
-            return 0;
+            return statuses;
         }
-        int status = payload.hasLockedNumber(number) ? 1 : 0;
-        for (GadgetStore.Table100Choice choice : gadgetStore.loadChoices(payload.tableId)) {
-            if (choice.number == number) {
-                status = choice.confirmed ? 2 : Math.max(status, 1);
+        for (Integer number : payload.lockedNumbers) {
+            if (number != null && number >= 1 && number <= 100) {
+                statuses.put(number, 1);
             }
         }
-        return status;
+        for (GadgetStore.Table100Choice choice : gadgetStore.loadChoices(payload.tableId)) {
+            if (choice.number >= 1 && choice.number <= 100) {
+                int previous = statuses.containsKey(choice.number) ? statuses.get(choice.number) : 0;
+                statuses.put(choice.number, choice.confirmed ? 2 : Math.max(previous, 1));
+            }
+        }
+        return statuses;
+    }
+
+    private int table100NumberStatus(Map<Integer, Integer> statuses, int number) {
+        return statuses == null || !statuses.containsKey(number) ? 0 : statuses.get(number);
+    }
+
+    private int table100NumberStatus(GadgetStore.Table100Payload payload, int number, boolean owner) {
+        return table100NumberStatus(table100NumberStatuses(payload), number);
     }
 
     private void showTable100NumberDialog(int number, GadgetStore.Table100Payload payload, boolean owner) {
@@ -4041,8 +4059,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         new Thread(() -> {
             try {
                 StorePaymentClient.CartelaState state = storePaymentClient.chooseCartelaNumber(payload.tableId, chooserDeviceId, chooserName, number, reserved);
-                gadgetStore.mergeOnlineCartela(state);
-                runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                boolean changed = gadgetStore.mergeOnlineCartela(state);
+                if (changed) {
+                    runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                }
             } catch (Exception ex) {
                 String message = ex.getMessage() == null ? "" : ex.getMessage();
                 if ("number_taken".equals(message)) {
@@ -4086,8 +4106,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         new Thread(() -> {
             try {
                 StorePaymentClient.CartelaState state = storePaymentClient.confirmCartelaNumber(payload.tableId, ownerDeviceId, chooserDeviceId, number, confirmed);
-                gadgetStore.mergeOnlineCartela(state);
-                runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                boolean changed = gadgetStore.mergeOnlineCartela(state);
+                if (changed) {
+                    runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                }
             } catch (Exception ex) {
                 runOnUiThread(() -> Toast.makeText(this, "Confirmacao salva localmente. Vou sincronizar quando possivel.", Toast.LENGTH_LONG).show());
             }
@@ -4102,8 +4124,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         new Thread(() -> {
             try {
                 StorePaymentClient.CartelaState state = storePaymentClient.deleteCartelaChoice(payload.tableId, ownerDeviceId, chooserDeviceId, number);
-                gadgetStore.mergeOnlineCartela(state);
-                runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                boolean changed = gadgetStore.mergeOnlineCartela(state);
+                if (changed) {
+                    runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                }
             } catch (Exception ex) {
                 runOnUiThread(() -> Toast.makeText(this, "Remocao salva localmente. Vou sincronizar quando possivel.", Toast.LENGTH_LONG).show());
             }

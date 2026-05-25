@@ -168,18 +168,37 @@ public final class GadgetStore {
                 "", lockedNumbers(tableId), table100ReservationsEnabled(), table100ReservationHours());
     }
 
-    public void mergeOnlineCartela(StorePaymentClient.CartelaState state) {
+    public boolean mergeOnlineCartela(StorePaymentClient.CartelaState state) {
         if (state == null || state.tableId.isEmpty()) {
-            return;
+            return false;
         }
         if (state.tableId.equals(currentTable100InstanceId())) {
             saveTable100ReservationSettings(state.allowReservations, state.reservationHours);
         }
-        removeChoicesForTable(state.tableId);
-        for (StorePaymentClient.CartelaChoice choice : state.choices) {
-            saveChoice(state.tableId, choice.chooserDeviceId, choice.number, choice.chooserName,
-                    choice.confirmed, choice.reserved, choice.reservationExpiresAt);
+        try {
+            JSONArray items = rawChoices();
+            String before = items.toString();
+            JSONArray merged = new JSONArray();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                if (!state.tableId.equals(item.optString("tableId", ""))) {
+                    merged.put(item);
+                }
+            }
+            for (StorePaymentClient.CartelaChoice choice : state.choices) {
+                if (choice.number >= 1 && choice.number <= 100 && !choice.chooserDeviceId.trim().isEmpty()) {
+                    merged.put(choiceJson(state.tableId, choice.chooserDeviceId, choice.number, choice.chooserName,
+                            choice.confirmed, choice.reserved, choice.reservationExpiresAt));
+                }
+            }
+            String after = merged.toString();
+            if (!before.equals(after)) {
+                prefs.edit().putString(KEY_TABLE_100_CHOICES, after).apply();
+                return true;
+            }
+        } catch (JSONException ignored) {
         }
+        return false;
     }
 
     private String currentTable100InstanceId() {
@@ -222,19 +241,23 @@ public final class GadgetStore {
                 }
             }
             if (!changed) {
-                JSONObject item = new JSONObject();
-                item.put("tableId", tableId);
-                item.put("address", address);
-                item.put("number", number);
-                item.put("name", clean(name));
-                item.put("confirmed", confirmed);
-                item.put("reserved", reserved && !confirmed);
-                item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
-                items.put(item);
+                items.put(choiceJson(tableId, address, number, name, confirmed, reserved, reservationExpiresAt));
             }
             prefs.edit().putString(KEY_TABLE_100_CHOICES, items.toString()).apply();
         } catch (JSONException ignored) {
         }
+    }
+
+    private JSONObject choiceJson(String tableId, String address, int number, String name, boolean confirmed, boolean reserved, long reservationExpiresAt) throws JSONException {
+        JSONObject item = new JSONObject();
+        item.put("tableId", tableId);
+        item.put("address", address);
+        item.put("number", number);
+        item.put("name", clean(name));
+        item.put("confirmed", confirmed);
+        item.put("reserved", reserved && !confirmed);
+        item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
+        return item;
     }
 
     public void setChoiceConfirmed(String tableId, String address, int number, boolean confirmed) {
