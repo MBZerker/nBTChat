@@ -2593,6 +2593,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         TextView formula = text(String.format(Locale.getDefault(), "Dias extras usam taxa diária %s e potencializador %.2f.", money(product.dailyFee), product.power),
                 13, secondary(), Typeface.NORMAL);
         root.addView(formula, topMargin(dp(4)));
+        formula.setVisibility(View.GONE);
 
         LinearLayout rows = vertical();
         root.addView(rows, topMargin(dp(14)));
@@ -2928,9 +2929,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         currentScreen = "store_config";
         messageList = null;
 
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
         LinearLayout root = vertical();
         root.setBackgroundColor(color(background()));
-        applyRootInsets(root, dp(18), dp(12), dp(18), dp(16));
+        applyRootInsets(root, dp(18), dp(12), dp(18), dp(132));
+        scrollView.addView(root, matchWrap());
 
         LinearLayout top = horizontal();
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -3014,7 +3018,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         });
         root.addView(save, topMargin(dp(16)));
 
-        setContentView(root);
+        setContentView(scrollView);
         requestInsets(root);
     }
 
@@ -4654,6 +4658,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 && !currentRemoteAddress.isEmpty()
                 && btChatManager != null
                 && !btChatManager.canSendTo(currentRemoteAddress);
+        ring.setLoading(shouldSpin);
         if (shouldSpin && !chatAvatarSpinning) {
             chatAvatarSpinning = true;
             spinChatAvatarFrame();
@@ -4661,6 +4666,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             chatAvatarSpinning = false;
             ring.animate().cancel();
             ring.setRotation(0f);
+            ring.setLoading(false);
         }
     }
 
@@ -6322,6 +6328,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         private final RectF bounds = new RectF();
         private final int strokeWidth;
         private int ringColor = color("#9CA3AF");
+        private boolean loading;
 
         LoadingRingView(Context context, int strokeWidth) {
             super(context);
@@ -6339,15 +6346,28 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             invalidate();
         }
 
+        void setLoading(boolean value) {
+            if (loading != value) {
+                loading = value;
+                invalidate();
+            }
+        }
+
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             float inset = strokeWidth / 2f + 1f;
             bounds.set(inset, inset, getWidth() - inset, getHeight() - inset);
-            basePaint.setColor(adjustAlpha(ringColor, 0.28f));
             arcPaint.setColor(ringColor);
+            if (!loading) {
+                canvas.drawOval(bounds, arcPaint);
+                return;
+            }
+            basePaint.setColor(adjustAlpha(ringColor, 0.24f));
             canvas.drawOval(bounds, basePaint);
-            canvas.drawArc(bounds, -70f, 96f, false, arcPaint);
+            double wave = Math.abs(Math.sin(Math.toRadians(getRotation() * 1.65f)));
+            float sweep = 52f + (float) (wave * 168f);
+            canvas.drawArc(bounds, -70f, sweep, false, arcPaint);
         }
     }
 

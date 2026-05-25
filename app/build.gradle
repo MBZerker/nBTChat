@@ -17,8 +17,8 @@ android {
         applicationId "com.mbzerker.nbtchat"
         minSdk 26
         targetSdk 35
-        versionCode 39
-        versionName "0.4.17"
+        versionCode 40
+        versionName "0.4.18"
         buildConfigField "String", "NBTCHAT_STORE_BASE_URL", quoteBuildConfig("https://nbtchat-store.nectof.workers.dev")
     }
 
