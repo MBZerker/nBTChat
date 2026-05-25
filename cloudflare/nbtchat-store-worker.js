@@ -4,6 +4,7 @@ const PRODUCTS = {
     title: "Cartela de eventos",
     price: 2.49,
     dailyFee: 1.25,
+    power: 1.25,
     durationDays: 1,
     footer: "Produto destinado exclusivamente para organizacao de eventos familiares, recreativos e chas beneficentes.",
   },
@@ -41,10 +42,12 @@ function normalizeProduct(product, fallback) {
   const base = fallback || PRODUCTS.cartela_de_eventos;
   let price = Math.max(0.01, Number(product.price) || base.price);
   let dailyFee = Math.max(0, Number(product.dailyFee) || base.dailyFee || 0);
+  let power = Math.max(1, Number(product.power) || base.power || 1.25);
   let durationDays = clampInt(product.durationDays, base.durationDays, 1, 365);
   if (base.id === "cartela_de_eventos" && price === 4.99 && durationDays === 15 && !Number(product.dailyFee)) {
     price = base.price;
     dailyFee = base.dailyFee || 0;
+    power = base.power || 1.25;
     durationDays = base.durationDays;
   }
   return {
@@ -52,6 +55,7 @@ function normalizeProduct(product, fallback) {
     title: clean(product.title || base.title),
     price,
     dailyFee,
+    power,
     durationDays,
     footer: clean(product.footer || base.footer),
   };
@@ -350,6 +354,10 @@ function adminProductsForm(product) {
           <label>Taxa diÃ¡ria em R$</label>
           <input name="dailyFee" value="${escapeHtml(String((product.dailyFee || 0).toFixed(2)).replace(".", ","))}" required inputmode="decimal">
         </div>
+        <div>
+          <label>Potencializador</label>
+          <input name="power" value="${escapeHtml(String(product.power || 1.25).replace(".", ","))}" required inputmode="decimal">
+        </div>
       </div>
       <label>Rodapé/observação</label>
       <textarea name="footer" required>${escapeHtml(product.footer)}</textarea>
@@ -370,6 +378,7 @@ async function saveAdminProducts(request, env) {
     title: data.title,
     price: decimalNumber(data.price),
     dailyFee: decimalNumber(data.dailyFee),
+    power: decimalNumber(data.power),
     durationDays: data.durationDays,
     footer: data.footer,
   }, fallback);
@@ -551,7 +560,8 @@ function normalizeCartelaOrder(raw, product) {
   }
   return parsed.slice(0, 20).map((item, index) => {
     const days = clampInt(item && item.days, product.durationDays || 1, 1, 365);
-    const price = product.price + (Number(product.dailyFee) || 0) * Math.pow(Math.max(0, days - 1), 1.25);
+    const extraDays = Math.max(0, days - clampInt(product.durationDays, 1, 1, 365));
+    const price = product.price + (Number(product.dailyFee) || 0) * Math.pow(extraDays, Number(product.power) || 1.25);
     return {
       index: index + 1,
       days,
@@ -1004,6 +1014,11 @@ async function checkoutPage(url, env) {
   const productId = clean(url.searchParams.get("productId") || "cartela_de_eventos");
   const deviceId = clean(url.searchParams.get("deviceId"));
   const product = await getProduct(env, productId) || (await getProduct(env, "cartela_de_eventos"));
+  const cartelas = normalizeCartelaOrder(url.searchParams.get("cartelas"), product);
+  const totalPrice = cartelas.reduce((sum, item) => sum + item.price, 0);
+  const cartelaSummary = cartelas.map((item) =>
+    `<div class="line"><div class="line-head"><span>Cartela ${item.index}</span><span>R$ ${item.price.toFixed(2).replace(".", ",")}</span></div><p>${item.days} dia${item.days === 1 ? "" : "s"}</p></div>`
+  ).join("");
   if (!deviceId) {
     return html("<h1>nBTChat Loja</h1><p>Abra esta tela pelo app para comprar.</p>");
   }
@@ -1024,9 +1039,6 @@ async function checkoutPage(url, env) {
     input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5cf; border-radius: 12px; padding: 13px; font-size: 16px; margin-top: 6px; }
     .line { border: 1px solid #d7ddd8; border-radius: 14px; padding: 12px; margin-top: 10px; background: #f8faf9; }
     .line-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-weight: 800; }
-    .line-controls { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
-    .mini { width: auto; min-width: 42px; padding: 12px 14px; margin-top: 0; background: #eef2f0; color: #17212b; }
-    .add { background: #ddf7e8; color: #14532d; }
     .total { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid #d7ddd8; font-weight: 900; }
     button { width: 100%; border: 0; border-radius: 14px; padding: 14px; margin-top: 18px; background: #16a34a; color: white; font-weight: 800; font-size: 16px; }
     .price { margin: 14px 0 8px; }
@@ -1038,8 +1050,6 @@ async function checkoutPage(url, env) {
       main { background: #18232c; border-color: #2f3b45; }
       input { background: #24313b; border-color: #2f3b45; color: #f7f8f5; }
       .line { background: #1d2933; border-color: #2f3b45; }
-      .mini { background: #24313b; color: #f7f8f5; }
-      .add { background: #123328; color: #bbf7d0; }
     }
   </style>
 </head>
@@ -1052,59 +1062,18 @@ async function checkoutPage(url, env) {
     <form method="post" action="/create-payment">
       <input type="hidden" name="productId" value="${escapeHtml(product.id)}">
       <input type="hidden" name="deviceId" value="${escapeHtml(deviceId)}">
-      <input type="hidden" name="cartelas" id="cartelasInput">
+      <input type="hidden" name="cartelas" value="${escapeHtml(JSON.stringify(cartelas.map((item) => ({ days: item.days }))))}">
       <label>Cartelas</label>
-      <div id="cartelas"></div>
-      <button type="button" class="add" onclick="addCartela()">+ Adicionar cartela</button>
-      <div class="total"><span>Total</span><span id="total">R$ 0,00</span></div>
+      ${cartelaSummary}
+      <div class="total"><span>Total</span><span>R$ ${totalPrice.toFixed(2).replace(".", ",")}</span></div>
       <label>Nome</label>
       <input name="buyerName" autocomplete="name" required minlength="3" maxlength="80">
       <label>CPF</label>
       <input name="buyerCpf" inputmode="numeric" autocomplete="off" required minlength="11" maxlength="14">
-      <button type="submit" onclick="syncOrder()">Continuar pagamento</button>
+      <button type="submit">Continuar pagamento</button>
     </form>
     <p class="footer">${escapeHtml(product.footer)}</p>
   </main>
-  <script>
-    const basePrice = ${JSON.stringify(Number(product.price.toFixed(2)))};
-    const dailyFee = ${JSON.stringify(Number((product.dailyFee || 0).toFixed(2)))};
-    const rows = [{ days: ${JSON.stringify(product.durationDays)} }];
-    const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-    function priceFor(days) {
-      return basePrice + dailyFee * Math.pow(Math.max(0, (Number(days) || 1) - 1), 1.25);
-    }
-    function renderRows() {
-      const host = document.getElementById("cartelas");
-      host.innerHTML = "";
-      rows.forEach((row, index) => {
-        const line = document.createElement("div");
-        line.className = "line";
-        line.innerHTML = '<div class="line-head"><span>Cartela ' + (index + 1) + '</span><span>' + money.format(priceFor(row.days)) + '</span></div>'
-          + '<div class="line-controls"><label>Dias de uso<input min="1" max="365" inputmode="numeric" type="number" value="' + row.days + '" oninput="setDays(' + index + ', this.value)"></label>'
-          + (rows.length > 1 ? '<button type="button" class="mini" onclick="removeCartela(' + index + ')">Remover</button>' : '<span></span>') + '</div>';
-        host.appendChild(line);
-      });
-      syncOrder();
-    }
-    function setDays(index, value) {
-      rows[index].days = Math.max(1, Math.min(365, Number.parseInt(value, 10) || 1));
-      renderRows();
-    }
-    function addCartela() {
-      rows.push({ days: ${JSON.stringify(product.durationDays)} });
-      renderRows();
-    }
-    function removeCartela(index) {
-      rows.splice(index, 1);
-      if (!rows.length) rows.push({ days: ${JSON.stringify(product.durationDays)} });
-      renderRows();
-    }
-    function syncOrder() {
-      document.getElementById("cartelasInput").value = JSON.stringify(rows);
-      document.getElementById("total").textContent = money.format(rows.reduce((sum, row) => sum + priceFor(row.days), 0));
-    }
-    renderRows();
-  </script>
 </body>
 </html>`);
 }

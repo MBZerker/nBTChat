@@ -27,6 +27,12 @@ public final class StorePaymentClient {
         return Uri.parse(baseUrl + "/checkout?productId=" + PRODUCT_CARTELA_EVENTOS + "&deviceId=" + Uri.encode(deviceId));
     }
 
+    public Uri cartelaCheckoutUri(String deviceId, String cartelasJson) {
+        return Uri.parse(baseUrl + "/checkout?productId=" + PRODUCT_CARTELA_EVENTOS
+                + "&deviceId=" + Uri.encode(deviceId)
+                + "&cartelas=" + Uri.encode(cartelasJson == null ? "" : cartelasJson));
+    }
+
     public Uri cartelaRecoveryUri(String deviceId) {
         return Uri.parse(baseUrl + "/recover?productId=" + PRODUCT_CARTELA_EVENTOS + "&deviceId=" + Uri.encode(deviceId));
     }
@@ -61,6 +67,12 @@ public final class StorePaymentClient {
                 json.optLong("expiresAt", 0L),
                 json.optString("title", GadgetStore.TABLE_100_TITLE)
         );
+    }
+
+    public ProductConfig getCartelaProduct() throws Exception {
+        JSONObject products = request("/").optJSONObject("products");
+        JSONObject item = products == null ? null : products.optJSONObject(PRODUCT_CARTELA_EVENTOS);
+        return ProductConfig.fromJson(item);
     }
 
     public CartelaState registerCartela(String tableId, String ownerDeviceId, String ownerName,
@@ -241,6 +253,41 @@ public final class StorePaymentClient {
             this.productId = productId == null ? PRODUCT_CARTELA_EVENTOS : productId;
             this.expiresAt = expiresAt;
             this.title = title == null ? "" : title;
+        }
+    }
+
+    public static final class ProductConfig {
+        public final String id;
+        public final String title;
+        public final double price;
+        public final double dailyFee;
+        public final double power;
+        public final int durationDays;
+        public final String footer;
+
+        ProductConfig(String id, String title, double price, double dailyFee, double power, int durationDays, String footer) {
+            this.id = id == null ? PRODUCT_CARTELA_EVENTOS : id;
+            this.title = title == null || title.trim().isEmpty() ? GadgetStore.TABLE_100_TITLE : title;
+            this.price = price > 0 ? price : 2.49;
+            this.dailyFee = Math.max(0, dailyFee);
+            this.power = power >= 1 ? power : 1.25;
+            this.durationDays = Math.max(1, Math.min(365, durationDays));
+            this.footer = footer == null ? GadgetStore.TABLE_100_FOOTER : footer;
+        }
+
+        static ProductConfig fromJson(JSONObject json) {
+            if (json == null) {
+                return new ProductConfig(PRODUCT_CARTELA_EVENTOS, GadgetStore.TABLE_100_TITLE, 2.49, 1.25, 1.25, 1, GadgetStore.TABLE_100_FOOTER);
+            }
+            return new ProductConfig(
+                    json.optString("id", PRODUCT_CARTELA_EVENTOS),
+                    json.optString("title", GadgetStore.TABLE_100_TITLE),
+                    json.optDouble("price", 2.49),
+                    json.optDouble("dailyFee", 1.25),
+                    json.optDouble("power", 1.25),
+                    json.optInt("durationDays", 1),
+                    json.optString("footer", GadgetStore.TABLE_100_FOOTER)
+            );
         }
     }
 

@@ -88,6 +88,7 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 import com.google.zxing.qrcode.QRCodeWriter;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -236,6 +237,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final Set<String> onlineAddresses = new HashSet<>();
     private final Map<String, String> contactPresence = new HashMap<>();
     private final Map<String, Long> remoteTypingUntil = new HashMap<>();
+    private final List<CartelaPurchaseLine> cartelaPurchaseLines = new ArrayList<>();
     private boolean localTypingSent;
     private long lastTypingSentAt;
     private Runnable typingStopRunnable;
@@ -409,9 +411,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             tryStartBluetooth();
         }
         startPeriodicUpdateChecks(false);
-        if (gadgetStore != null && gadgetStore.hasPendingTable100Payment()) {
-            syncCartelaEntitlement(false);
-        }
     }
 
     @Override
@@ -420,7 +419,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             leaveChatToHome();
         } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen) || "share_targets".equals(currentScreen)) {
             showHomeScreen();
-        } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen)) {
+        } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen) || "cartela_purchase".equals(currentScreen)) {
             showStoreScreen();
         } else if ("store".equals(currentScreen)) {
             showUpdatesScreen();
@@ -2474,6 +2473,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Button options = pillButton("Opcoes", "#16A34A", "#FFFFFF");
             options.setOnClickListener(v -> showTable100OptionsDialog());
             item.addView(options, topMargin(dp(12)));
+            Button buyMore = pillButton("Comprar mais cartelas", surfaceAlt(), primary());
+            buyMore.setOnClickListener(v -> startCartelaPurchase());
+            item.addView(buyMore, topMargin(dp(8)));
             item.setOnClickListener(v -> showTable100OptionsDialog());
             card.setOnClickListener(v -> showTable100OptionsDialog());
         } else if (gadgetStore.hasPendingTable100Payment()) {
@@ -2520,8 +2522,172 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void startCartelaPurchase() {
+        cartelaPurchaseLines.clear();
+        showCartelaPurchaseScreen();
+    }
+
+    private void showCartelaPurchaseScreen() {
+        currentScreen = "cartela_purchase";
+        messageList = null;
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
+        scrollView.addView(root, matchWrap());
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showStoreScreen()));
+        TextView title = text("Comprar cartelas", 26, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        addTopActions(top);
+        root.addView(top);
+
+        TextView loading = text("Carregando valores da loja...", 14, secondary(), Typeface.BOLD);
+        root.addView(loading, topMargin(dp(18)));
+        setContentView(scrollView);
+        requestInsets(root);
+
+        new Thread(() -> {
+            StorePaymentClient.ProductConfig product;
+            try {
+                product = storePaymentClient.getCartelaProduct();
+            } catch (Exception ex) {
+                product = StorePaymentClient.ProductConfig.fromJson(null);
+            }
+            StorePaymentClient.ProductConfig finalProduct = product;
+            runOnUiThread(() -> renderCartelaPurchaseScreen(finalProduct));
+        }, "nBTChat-cartela-product").start();
+    }
+
+    private void renderCartelaPurchaseScreen(StorePaymentClient.ProductConfig product) {
+        currentScreen = "cartela_purchase";
+        if (cartelaPurchaseLines.isEmpty()) {
+            cartelaPurchaseLines.add(new CartelaPurchaseLine(product.durationDays));
+        }
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
+        scrollView.addView(root, matchWrap());
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showStoreScreen()));
+        TextView title = text("Comprar cartelas", 26, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        addTopActions(top);
+        root.addView(top);
+
+        TextView info = text(String.format(Locale.getDefault(), "Preço inicial: %s = %d dia%s", money(product.price), product.durationDays, product.durationDays == 1 ? "" : "s"),
+                15, primary(), Typeface.BOLD);
+        root.addView(info, topMargin(dp(16)));
+        TextView formula = text(String.format(Locale.getDefault(), "Dias extras usam taxa diária %s e potencializador %.2f.", money(product.dailyFee), product.power),
+                13, secondary(), Typeface.NORMAL);
+        root.addView(formula, topMargin(dp(4)));
+
+        LinearLayout rows = vertical();
+        root.addView(rows, topMargin(dp(14)));
+        TextView total = text("", 22, "#16A34A", Typeface.BOLD);
+
+        Runnable[] rerender = new Runnable[1];
+        rerender[0] = () -> renderCartelaPurchaseScreen(product);
+        for (int i = 0; i < cartelaPurchaseLines.size(); i++) {
+            rows.addView(cartelaPurchaseRow(product, i, rerender[0]), topMargin(i == 0 ? 0 : dp(10)));
+        }
+
+        ImageButton add = iconButton(R.drawable.ic_add_24, "Adicionar cartela", dp(58), v -> {
+            cartelaPurchaseLines.add(new CartelaPurchaseLine(product.durationDays));
+            renderCartelaPurchaseScreen(product);
+        });
+        add.setBackground(rounded("#16A34A", dp(29), "#16A34A"));
+        add.setColorFilter(color("#FFFFFF"));
+        LinearLayout addRow = horizontal();
+        addRow.setGravity(Gravity.CENTER);
+        addRow.addView(add);
+        root.addView(addRow, topMargin(dp(14)));
+
+        double sum = 0;
+        for (CartelaPurchaseLine line : cartelaPurchaseLines) {
+            sum += cartelaLinePrice(product, line.days);
+        }
+        total.setText("Total: " + money(sum));
+        root.addView(total, topMargin(dp(14)));
+
+        TextView disclaimer = text("A compra libera o uso pelo período escolhido. O uso do item e a finalidade da organização são responsabilidade do comprador.", 12, secondary(), Typeface.NORMAL);
+        disclaimer.setLineSpacing(dp(2), 1f);
+        root.addView(disclaimer, topMargin(dp(10)));
+
+        Button continueButton = pillButton("Continuar pagamento", "#16A34A", "#FFFFFF");
+        continueButton.setOnClickListener(v -> openCartelaCheckoutFromApp(product));
+        root.addView(continueButton, topMargin(dp(16)));
+
+        setContentView(scrollView);
+        requestInsets(root);
+    }
+
+    private View cartelaPurchaseRow(StorePaymentClient.ProductConfig product, int index, Runnable rerender) {
+        CartelaPurchaseLine line = cartelaPurchaseLines.get(index);
+        LinearLayout row = vertical();
+        row.setPadding(dp(14), dp(12), dp(14), dp(12));
+        row.setBackground(rounded(surface(), dp(14), border()));
+        LinearLayout head = horizontal();
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(text("Cartela " + (index + 1), 17, primary(), Typeface.BOLD), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        head.addView(text(money(cartelaLinePrice(product, line.days)), 17, "#16A34A", Typeface.BOLD));
+        row.addView(head);
+
+        LinearLayout controls = horizontal();
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+        TextView days = text(line.days + " dia" + (line.days == 1 ? "" : "s"), 15, "#38BDF8", Typeface.BOLD);
+        controls.addView(days, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        controls.addView(iconButton(R.drawable.ic_minus_24, "Menos dias", dp(42), v -> {
+            line.days = Math.max(1, line.days - 1);
+            rerender.run();
+        }));
+        controls.addView(iconButton(R.drawable.ic_add_24, "Mais dias", dp(42), v -> {
+            line.days = Math.min(365, line.days + 1);
+            rerender.run();
+        }));
+        if (cartelaPurchaseLines.size() > 1) {
+            controls.addView(iconButton(R.drawable.ic_delete_24, "Remover cartela", dp(42), v -> {
+                cartelaPurchaseLines.remove(index);
+                rerender.run();
+            }));
+        }
+        row.addView(controls, topMargin(dp(10)));
+        return row;
+    }
+
+    private double cartelaLinePrice(StorePaymentClient.ProductConfig product, int days) {
+        int extraDays = Math.max(0, days - product.durationDays);
+        return product.price + product.dailyFee * Math.pow(extraDays, product.power);
+    }
+
+    private String cartelaOrderJson() {
+        JSONArray array = new JSONArray();
+        for (CartelaPurchaseLine line : cartelaPurchaseLines) {
+            JSONObject item = new JSONObject();
+            try {
+                item.put("days", line.days);
+                array.put(item);
+            } catch (JSONException ignored) {
+            }
+        }
+        return array.toString();
+    }
+
+    private void openCartelaCheckoutFromApp(StorePaymentClient.ProductConfig product) {
         String deviceId = StoreDeviceId.get(this);
-        Uri checkoutUri = storePaymentClient.cartelaCheckoutUri(deviceId);
+        Uri checkoutUri = storePaymentClient.cartelaCheckoutUri(deviceId, cartelaOrderJson());
         gadgetStore.savePendingTable100Payment(checkoutUri.toString(), deviceId);
         new AlertDialog.Builder(this)
                 .setTitle("Antes de continuar")
@@ -2533,6 +2699,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 })
                 .setNegativeButton("Cancelar", null)
                 .show();
+    }
+
+    private String money(double value) {
+        return String.format(Locale.getDefault(), "R$ %.2f", value).replace(".", ",");
     }
 
     private void recoverCartelaPurchase() {
@@ -6188,6 +6358,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             this.kind = kind == null ? MessageStore.KIND_IMAGE : kind;
             this.body = body == null ? "" : body;
             this.mediaBase64 = mediaBase64 == null ? "" : mediaBase64;
+        }
+    }
+
+    private static final class CartelaPurchaseLine {
+        int days;
+
+        CartelaPurchaseLine(int days) {
+            this.days = Math.max(1, Math.min(365, days));
         }
     }
 
