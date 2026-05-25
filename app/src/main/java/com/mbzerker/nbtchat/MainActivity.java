@@ -6516,9 +6516,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             basePaint.setColor(adjustAlpha(ringColor, 0.24f));
             canvas.drawOval(bounds, basePaint);
-            double wave = Math.abs(Math.sin(Math.toRadians(getRotation() * 1.65f)));
-            float sweep = 52f + (float) (wave * 168f);
+            long phase = System.currentTimeMillis() % 1500L;
+            float progress = phase < 500L ? phase / 500f : 1f;
+            float eased = (float) Math.sin(progress * Math.PI / 2f);
+            float sweep = 52f + eased * 168f;
             canvas.drawArc(bounds, -70f, sweep, false, arcPaint);
+            postInvalidateOnAnimation();
         }
     }
 

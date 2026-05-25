@@ -1,9 +1,9 @@
 {
-  "versionCode": 41,
-  "versionName": "0.4.19",
+  "versionCode": 42,
+  "versionName": "0.4.20",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.19.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.20.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Atualizacao direta pelo app; busca Bluetooth em ciclos para economizar bateria; sincronizacao online mais leve para cartelas compartilhadas."
+  "changelog": "Reduz disputa de conexao Bluetooth entre aparelhos pareados; ajusta a animacao de loading na borda da foto."
 }
