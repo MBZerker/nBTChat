@@ -4099,19 +4099,40 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showTable100ChoiceActions(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String name) {
         List<String> actions = new ArrayList<>();
         actions.add("Editar nome");
-        actions.add(choice.removed ? "Excluir permanentemente" : "Remover");
+        if (choice.removed) {
+            actions.add("Restaurar");
+            actions.add("Excluir permanentemente");
+        } else {
+            actions.add("Remover");
+        }
         new AlertDialog.Builder(this)
                 .setTitle(name + " - numero " + choice.number)
                 .setItems(actions.toArray(new String[0]), (dialog, which) -> {
                     String action = actions.get(which);
                     if ("Editar nome".equals(action)) {
                         showRenameTable100ChoiceDialog(payload, choice, name);
+                    } else if ("Restaurar".equals(action)) {
+                        restoreTable100Choice(payload, choice, name);
                     } else if (choice.removed) {
                         confirmPermanentDeleteTable100Choice(payload, choice, name);
                     } else {
                         confirmDeleteTable100Choice(payload, choice, name);
                     }
                 })
+                .show();
+    }
+
+    private void restoreTable100Choice(GadgetStore.Table100Payload payload, GadgetStore.Table100Choice choice, String name) {
+        new AlertDialog.Builder(this)
+                .setTitle("Restaurar participante?")
+                .setMessage(name + " voltara para Pendentes e o numero " + choice.number + " continuara aguardando confirmacao.")
+                .setPositiveButton("Restaurar", (dialog, which) -> {
+                    gadgetStore.markChoiceRemoved(payload.tableId, choice.address, choice.number, false);
+                    restoreTable100ChoiceOnline(payload, choice.address, choice.number);
+                    refreshTable100PlayScreen();
+                    Toast.makeText(this, name + " restaurado.", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancelar", null)
                 .show();
     }
 
@@ -4266,6 +4287,24 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 runOnUiThread(() -> Toast.makeText(this, "Nome salvo localmente. Vou sincronizar quando possivel.", Toast.LENGTH_LONG).show());
             }
         }, "nBTChat-cartela-rename").start();
+    }
+
+    private void restoreTable100ChoiceOnline(GadgetStore.Table100Payload payload, String chooserDeviceId, int number) {
+        if (storePaymentClient == null || payload == null || payload.tableId.isEmpty()) {
+            return;
+        }
+        String ownerDeviceId = StoreDeviceId.get(this);
+        new Thread(() -> {
+            try {
+                StorePaymentClient.CartelaState state = storePaymentClient.restoreCartelaChoice(payload.tableId, ownerDeviceId, chooserDeviceId, number);
+                boolean changed = gadgetStore.mergeOnlineCartela(state);
+                if (changed) {
+                    runOnUiThread(() -> refreshTable100IfOpen(payload.tableId));
+                }
+            } catch (Exception ex) {
+                runOnUiThread(() -> Toast.makeText(this, "Restauracao salva localmente. Vou sincronizar quando possivel.", Toast.LENGTH_LONG).show());
+            }
+        }, "nBTChat-cartela-restore").start();
     }
 
     private void deleteTable100ChoiceOnline(GadgetStore.Table100Payload payload, String chooserDeviceId, int number, boolean permanent) {

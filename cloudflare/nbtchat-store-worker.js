@@ -426,6 +426,9 @@ export default {
       if (request.method === "POST" && url.pathname === "/cartela/rename-choice") {
         return renameCartelaChoice(request, env);
       }
+      if (request.method === "POST" && url.pathname === "/cartela/restore-choice") {
+        return restoreCartelaChoice(request, env);
+      }
       if (request.method === "POST" && url.pathname === "/cartela/delete-choice") {
         return deleteCartelaChoice(request, env);
       }
@@ -858,6 +861,37 @@ async function deleteCartelaChoice(request, env) {
     choice.removed = true;
     choice.updatedAt = Date.now();
   }
+  cartela.updatedAt = Date.now();
+  await writeCartela(env, cartela);
+  return json({ ok: true, cartela: publicCartela(cartela) });
+}
+
+async function restoreCartelaChoice(request, env) {
+  const data = await readBody(request);
+  const tableId = clean(data.tableId);
+  const ownerDeviceId = clean(data.ownerDeviceId);
+  const chooserDeviceId = clean(data.chooserDeviceId);
+  const number = Number.parseInt(data.number, 10);
+  if (!tableId || !ownerDeviceId || !chooserDeviceId || number < 1 || number > 100) {
+    return json({ error: "invalid_restore" }, 400);
+  }
+  const cartela = await readCartela(env, tableId);
+  if (!cartela.tableId) {
+    return json({ error: "cartela_not_found" }, 404);
+  }
+  if (cartela.ownerDeviceId !== ownerDeviceId) {
+    return json({ error: "owner_mismatch" }, 403);
+  }
+  cartela.choices = cleanupExpiredChoices(cartela);
+  const choice = cartela.choices.find((item) => item.chooserDeviceId === chooserDeviceId && Number(item.number) === number);
+  if (!choice) {
+    return json({ error: "choice_not_found" }, 404);
+  }
+  choice.confirmed = false;
+  choice.reserved = false;
+  choice.reservationExpiresAt = 0;
+  choice.removed = false;
+  choice.updatedAt = Date.now();
   cartela.updatedAt = Date.now();
   await writeCartela(env, cartela);
   return json({ ok: true, cartela: publicCartela(cartela) });

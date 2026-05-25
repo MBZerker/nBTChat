@@ -127,6 +127,15 @@ public final class StorePaymentClient {
         return CartelaState.fromJson(post("/cartela/rename-choice", body).optJSONObject("cartela"));
     }
 
+    public CartelaState restoreCartelaChoice(String tableId, String ownerDeviceId, String chooserDeviceId, int number) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("tableId", tableId == null ? "" : tableId);
+        body.put("ownerDeviceId", ownerDeviceId == null ? "" : ownerDeviceId);
+        body.put("chooserDeviceId", chooserDeviceId == null ? "" : chooserDeviceId);
+        body.put("number", number);
+        return CartelaState.fromJson(post("/cartela/restore-choice", body).optJSONObject("cartela"));
+    }
+
     private JSONObject request(String path) throws Exception {
         return requestAbsolute(baseUrl + path);
     }
