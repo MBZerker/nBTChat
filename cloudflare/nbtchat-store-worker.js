@@ -2,8 +2,9 @@ const PRODUCTS = {
   cartela_de_eventos: {
     id: "cartela_de_eventos",
     title: "Cartela de eventos",
-    price: 4.99,
-    durationDays: 15,
+    price: 2.49,
+    dailyFee: 1.25,
+    durationDays: 1,
     footer: "Produto destinado exclusivamente para organizacao de eventos familiares, recreativos e chas beneficentes.",
   },
 };
@@ -42,6 +43,7 @@ function normalizeProduct(product, fallback) {
     id: clean(product.id || base.id),
     title: clean(product.title || base.title),
     price: Math.max(0.01, Number(product.price) || base.price),
+    dailyFee: Math.max(0, Number(product.dailyFee) || base.dailyFee || 0),
     durationDays: clampInt(product.durationDays, base.durationDays, 1, 365),
     footer: clean(product.footer || base.footer),
   };
@@ -333,8 +335,12 @@ function adminProductsForm(product) {
           <input name="price" value="${escapeHtml(String(product.price.toFixed(2)).replace(".", ","))}" required inputmode="decimal">
         </div>
         <div>
-          <label>Dias de uso</label>
+          <label>Validade padrÃ£o em dias</label>
           <input name="durationDays" value="${escapeHtml(String(product.durationDays))}" required inputmode="numeric">
+        </div>
+        <div>
+          <label>Taxa diÃ¡ria em R$</label>
+          <input name="dailyFee" value="${escapeHtml(String((product.dailyFee || 0).toFixed(2)).replace(".", ","))}" required inputmode="decimal">
         </div>
       </div>
       <label>Rodapé/observação</label>
@@ -355,6 +361,7 @@ async function saveAdminProducts(request, env) {
     id,
     title: data.title,
     price: decimalNumber(data.price),
+    dailyFee: decimalNumber(data.dailyFee),
     durationDays: data.durationDays,
     footer: data.footer,
   }, fallback);
@@ -690,6 +697,7 @@ async function registerCartela(request, env) {
   const cartela = {
     tableId,
     productId: "cartela_de_eventos",
+    title: clean(data.title),
     ownerDeviceId,
     ownerName: clean(data.ownerName),
     ownerMessage: clean(data.ownerMessage),
@@ -923,6 +931,7 @@ function publicCartela(cartela) {
     productId: cartela.productId || "cartela_de_eventos",
     ownerDeviceId: cartela.ownerDeviceId || "",
     ownerName: cartela.ownerName || "",
+    title: cartela.title || "",
     ownerMessage: cartela.ownerMessage || "",
     copyText: cartela.copyText || "",
     ownerContact: cartela.ownerContact || "",

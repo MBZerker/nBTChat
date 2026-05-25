@@ -18,6 +18,7 @@ public final class GadgetStore {
     private static final String PREFS = "official_gadgets";
     private static final String KEY_TABLE_100_UNTIL = "table100_until";
     private static final String KEY_TABLE_100_TEXT = "table100_text";
+    private static final String KEY_TABLE_100_CUSTOM_TITLE = "table100_custom_title";
     private static final String KEY_TABLE_100_MESSAGE = "table100_message";
     private static final String KEY_TABLE_100_COPY = "table100_copy";
     private static final String KEY_TABLE_100_OWNER_CONTACT = "table100_owner_contact";
@@ -103,6 +104,11 @@ public final class GadgetStore {
         return table100CopyText();
     }
 
+    public String table100CustomTitle() {
+        String title = prefs.getString(KEY_TABLE_100_CUSTOM_TITLE, "");
+        return title == null ? "" : title.trim();
+    }
+
     public String table100OwnerMessage() {
         return prefs.getString(KEY_TABLE_100_MESSAGE, "");
     }
@@ -154,7 +160,12 @@ public final class GadgetStore {
     }
 
     public void saveTable100Texts(String ownerMessage, String copyText, String ownerContact) {
+        saveTable100Texts(table100CustomTitle(), ownerMessage, copyText, ownerContact);
+    }
+
+    public void saveTable100Texts(String customTitle, String ownerMessage, String copyText, String ownerContact) {
         prefs.edit()
+                .putString(KEY_TABLE_100_CUSTOM_TITLE, customTitle == null ? "" : customTitle.trim())
                 .putString(KEY_TABLE_100_MESSAGE, ownerMessage == null ? "" : ownerMessage.trim())
                 .putString(KEY_TABLE_100_COPY, copyText == null ? "" : copyText.trim())
                 .putString(KEY_TABLE_100_OWNER_CONTACT, ownerContact == null ? "" : ownerContact.trim())
@@ -164,7 +175,7 @@ public final class GadgetStore {
 
     public Table100Payload table100Payload() {
         String tableId = table100InstanceId();
-        return new Table100Payload(tableId, table100OwnerMessage(), table100CopyText(), table100OwnerContact(),
+        return new Table100Payload(tableId, table100CustomTitle(), table100OwnerMessage(), table100CopyText(), table100OwnerContact(),
                 "", lockedNumbers(tableId), table100ReservationsEnabled(), table100ReservationHours());
     }
 
@@ -174,6 +185,9 @@ public final class GadgetStore {
         }
         if (state.tableId.equals(currentTable100InstanceId())) {
             saveTable100ReservationSettings(state.allowReservations, state.reservationHours);
+            if (state.title != null && !state.title.trim().isEmpty()) {
+                prefs.edit().putString(KEY_TABLE_100_CUSTOM_TITLE, state.title.trim()).apply();
+            }
         }
         try {
             JSONArray items = rawChoices();
@@ -450,6 +464,7 @@ public final class GadgetStore {
 
     public static final class Table100Payload {
         public final String tableId;
+        public final String customTitle;
         public final String ownerMessage;
         public final String copyText;
         public final String ownerContact;
@@ -459,20 +474,25 @@ public final class GadgetStore {
         public final int reservationHours;
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact) {
-            this(tableId, ownerMessage, copyText, ownerContact, "", new ArrayList<>());
+            this(tableId, "", ownerMessage, copyText, ownerContact, "", new ArrayList<>(), false, DEFAULT_RESERVATION_HOURS);
+        }
+
+        Table100Payload(String tableId, String customTitle, String ownerMessage, String copyText, String ownerContact) {
+            this(tableId, customTitle, ownerMessage, copyText, ownerContact, "", new ArrayList<>(), false, DEFAULT_RESERVATION_HOURS);
         }
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact, List<Integer> lockedNumbers) {
-            this(tableId, ownerMessage, copyText, ownerContact, "", lockedNumbers);
+            this(tableId, "", ownerMessage, copyText, ownerContact, "", lockedNumbers, false, DEFAULT_RESERVATION_HOURS);
         }
 
         Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact, String ownerDeviceId, List<Integer> lockedNumbers) {
-            this(tableId, ownerMessage, copyText, ownerContact, ownerDeviceId, lockedNumbers, false, DEFAULT_RESERVATION_HOURS);
+            this(tableId, "", ownerMessage, copyText, ownerContact, ownerDeviceId, lockedNumbers, false, DEFAULT_RESERVATION_HOURS);
         }
 
-        Table100Payload(String tableId, String ownerMessage, String copyText, String ownerContact,
+        Table100Payload(String tableId, String customTitle, String ownerMessage, String copyText, String ownerContact,
                         String ownerDeviceId, List<Integer> lockedNumbers, boolean allowReservations, int reservationHours) {
             this.tableId = tableId == null ? "" : tableId;
+            this.customTitle = customTitle == null ? "" : customTitle;
             this.ownerMessage = ownerMessage == null ? "" : ownerMessage;
             this.copyText = copyText == null ? "" : copyText;
             this.ownerContact = ownerContact == null ? "" : ownerContact;
@@ -487,6 +507,7 @@ public final class GadgetStore {
                 JSONObject json = new JSONObject();
                 json.put("gadget", TABLE_100_ID);
                 json.put("tableId", tableId);
+                json.put("customTitle", customTitle);
                 json.put("ownerMessage", ownerMessage);
                 json.put("copyText", copyText);
                 json.put("ownerContact", ownerContact);
@@ -513,6 +534,7 @@ public final class GadgetStore {
                 if (TABLE_100_ID.equals(json.optString("gadget", ""))) {
                     return new Table100Payload(
                             json.optString("tableId", ""),
+                            json.optString("customTitle", ""),
                             json.optString("ownerMessage", ""),
                             json.optString("copyText", ""),
                             json.optString("ownerContact", ""),

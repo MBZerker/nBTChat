@@ -60,6 +60,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputContentInfo;
+import android.view.animation.LinearInterpolator;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -227,6 +228,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private VoiceControls playingVoiceControls;
     private Runnable voiceTicker;
     private Runnable updateCheckRunnable;
+    private Runnable table100AutoSyncRunnable;
     private long lastDiscoverableRequestAt;
     private final Set<String> onlineAddresses = new HashSet<>();
     private final Map<String, String> contactPresence = new HashMap<>();
@@ -234,6 +236,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private boolean localTypingSent;
     private long lastTypingSentAt;
     private Runnable typingStopRunnable;
+    private boolean chatAvatarSpinning;
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -371,6 +374,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.stop();
         }
         stopPeriodicUpdateChecks();
+        stopTable100AutoSync();
         super.onStop();
     }
 
@@ -379,6 +383,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         super.onDestroy();
         sendLocalTyping(false);
         stopVoicePlayback(false);
+        stopTable100AutoSync();
         if (btChatManager != null) {
             btChatManager.stop();
         }
@@ -1752,6 +1757,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         currentFingerprint = fingerprint == null ? "" : fingerprint;
         replyPreviewBar = null;
+        chatAvatarSpinning = false;
 
         LinearLayout root = vertical();
         root.setBackgroundColor(color(chatBackground()));
@@ -1806,6 +1812,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         }
         renderChatHistory(true);
+        if (currentRemoteAddress != null && !currentRemoteAddress.isEmpty() && !btChatManager.canSendTo(currentRemoteAddress)) {
+            connectForAddress(currentRemoteAddress);
+            updateChatHeaderStatus();
+        }
 
         addReplyPreviewBar(root);
 
@@ -2353,14 +2363,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (payload == null) {
             return new GadgetStore.Table100Payload("", "", "", "");
         }
-        List<Integer> lockedNumbers = new ArrayList<>(payload.lockedNumbers);
+        boolean trustLocalLocks = table100IsOwner(payload) || lastCartelaSyncAt.containsKey(payload.tableId);
+        List<Integer> lockedNumbers = trustLocalLocks ? new ArrayList<>() : new ArrayList<>(payload.lockedNumbers);
         for (Integer number : gadgetStore.lockedNumbers(payload.tableId)) {
             if (number != null && !lockedNumbers.contains(number)) {
                 lockedNumbers.add(number);
             }
         }
         String ownerDeviceId = payload.ownerDeviceId.isEmpty() ? StoreDeviceId.get(this) : payload.ownerDeviceId;
-        return new GadgetStore.Table100Payload(payload.tableId, payload.ownerMessage, payload.copyText, payload.ownerContact,
+        return new GadgetStore.Table100Payload(payload.tableId, payload.customTitle, payload.ownerMessage, payload.copyText, payload.ownerContact,
                 ownerDeviceId, lockedNumbers, payload.allowReservations, payload.reservationHours);
     }
 
@@ -2401,9 +2412,29 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private View table100StoreItem() {
+        FrameLayout card = new FrameLayout(this);
+        card.setMinimumHeight(dp(230));
+        card.setBackground(rounded(surface(), dp(12), border()));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            card.setClipToOutline(true);
+        }
+        ImageView backgroundImage = new ImageView(this);
+        backgroundImage.setImageResource(R.drawable.cartela_eventos_bg);
+        backgroundImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        backgroundImage.setAlpha(darkMode ? 0.34f : 0.42f);
+        card.addView(backgroundImage, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        View overlay = new View(this);
+        overlay.setBackgroundColor(color(darkMode ? "#AA101820" : "#DDF7F8F5"));
+        card.addView(overlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
         LinearLayout item = vertical();
         item.setPadding(dp(14), dp(14), dp(14), dp(14));
-        item.setBackground(rounded(surface(), dp(12), border()));
 
         LinearLayout header = horizontal();
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -2441,6 +2472,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             options.setOnClickListener(v -> showTable100OptionsDialog());
             item.addView(options, topMargin(dp(12)));
             item.setOnClickListener(v -> showTable100OptionsDialog());
+            card.setOnClickListener(v -> showTable100OptionsDialog());
         } else if (gadgetStore.hasPendingTable100Payment()) {
             TextView pending = text("Pagamento em andamento. Ao concluir, volte ao app e toque em verificar.", 13, secondary(), Typeface.BOLD);
             item.addView(pending, topMargin(dp(14)));
@@ -2458,9 +2490,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else {
             LinearLayout priceRow = horizontal();
             priceRow.setGravity(Gravity.CENTER_VERTICAL);
-            TextView price = text("R$ 4,99", 18, "#16A34A", Typeface.BOLD);
+            TextView price = text("R$ 2,49", 19, "#16A34A", Typeface.BOLD);
             priceRow.addView(price);
-            TextView days = text("15 dias", 14, "#38BDF8", Typeface.BOLD);
+            TextView days = text("1 dia", 14, "#38BDF8", Typeface.BOLD);
             LinearLayout.LayoutParams daysParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             daysParams.setMargins(dp(8), 0, 0, 0);
             priceRow.addView(days, daysParams);
@@ -2475,8 +2507,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             recover.setOnClickListener(v -> recoverCartelaPurchase());
             item.addView(recover, topMargin(dp(8)));
             item.setOnClickListener(v -> buy.performClick());
+            card.setOnClickListener(v -> buy.performClick());
         }
-        return item;
+        card.addView(item, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+        ));
+        return card;
     }
 
     private void startCartelaPurchase() {
@@ -2571,6 +2608,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         payload.tableId,
                         ownerDeviceId,
                         local.isComplete() ? local.getDisplayName() : "Dono",
+                        payload.customTitle,
                         payload.ownerMessage,
                         payload.copyText,
                         payload.ownerContact,
@@ -2733,6 +2771,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         subtitle.setLineSpacing(dp(2), 1f);
         root.addView(subtitle, topMargin(dp(12)));
 
+        root.addView(label("Titulo da cartela"));
+        EditText titleInput = input("Ex.: Evento beneficente");
+        titleInput.setSingleLine(true);
+        titleInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(60)});
+        titleInput.setText(gadgetStore.table100CustomTitle());
+        root.addView(titleInput, topMargin(dp(6)));
+
         root.addView(label("Mensagem para quem usar"));
         EditText messageInput = input("Mensagem exibida depois da escolha");
         messageInput.setSingleLine(false);
@@ -2785,7 +2830,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             } catch (Exception ex) {
                 hours = 24;
             }
-            gadgetStore.saveTable100Texts(messageInput.getText().toString(), copyInput.getText().toString(), contactInput.getText().toString());
+            gadgetStore.saveTable100Texts(titleInput.getText().toString(), messageInput.getText().toString(), copyInput.getText().toString(), contactInput.getText().toString());
             gadgetStore.saveTable100ReservationSettings(reservationSwitch.isChecked(), hours);
             registerCartelaOnline(false);
             hideKeyboard(contactInput);
@@ -2801,6 +2846,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showTable100PlayScreen(String configuredText) {
         table100ReturnScreen = currentScreen;
         currentTable100Text = configuredText == null ? "" : configuredText.trim();
+        GadgetStore.Table100Payload initialPayload = GadgetStore.Table100Payload.parse(currentTable100Text);
+        if (table100IsOwner(initialPayload)) {
+            currentTable100Text = table100PayloadWithKnownLocks(gadgetStore.table100Payload()).toMessageBody();
+        } else if (!initialPayload.tableId.isEmpty()) {
+            currentTable100Text = table100BodyWithKnownLocks(currentTable100Text);
+        }
         GadgetStore.Table100Payload payload = GadgetStore.Table100Payload.parse(currentTable100Text);
         boolean owner = table100IsOwner(payload);
         currentScreen = "table100_play";
@@ -2822,7 +2873,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 showStoreScreen();
             }
         }));
-        TextView title = text(GadgetStore.TABLE_100_TITLE, 26, primary(), Typeface.BOLD);
+        TextView title = text(table100DisplayTitle(payload), 26, primary(), Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
@@ -2868,13 +2919,59 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         setContentView(scrollView);
         requestInsets(root);
         syncCartelaOnline(payload, false);
+        scheduleTable100AutoSync(payload.tableId);
     }
 
     private void refreshTable100PlayScreen() {
-        String text = currentTable100Text;
+        String text = freshTable100BodyForCurrentScreen();
         String returnScreen = table100ReturnScreen;
         showTable100PlayScreen(text);
         table100ReturnScreen = returnScreen;
+    }
+
+    private String freshTable100BodyForCurrentScreen() {
+        GadgetStore.Table100Payload payload = GadgetStore.Table100Payload.parse(currentTable100Text);
+        if (table100IsOwner(payload)) {
+            return table100PayloadWithKnownLocks(gadgetStore.table100Payload()).toMessageBody();
+        }
+        if (!payload.tableId.isEmpty()) {
+            return table100BodyWithKnownLocks(currentTable100Text);
+        }
+        return currentTable100Text;
+    }
+
+    private String table100DisplayTitle(GadgetStore.Table100Payload payload) {
+        if (payload != null && !payload.customTitle.trim().isEmpty()) {
+            return payload.customTitle.trim();
+        }
+        return GadgetStore.TABLE_100_TITLE;
+    }
+
+    private void scheduleTable100AutoSync(String tableId) {
+        if (table100AutoSyncRunnable != null) {
+            uiHandler.removeCallbacks(table100AutoSyncRunnable);
+        }
+        if (tableId == null || tableId.trim().isEmpty()) {
+            table100AutoSyncRunnable = null;
+            return;
+        }
+        String cleanTableId = tableId.trim();
+        table100AutoSyncRunnable = () -> {
+            if (!"table100_play".equals(currentScreen) || currentTable100Text == null || !currentTable100Text.contains(cleanTableId)) {
+                table100AutoSyncRunnable = null;
+                return;
+            }
+            syncCartelaOnline(GadgetStore.Table100Payload.parse(currentTable100Text), false);
+            uiHandler.postDelayed(table100AutoSyncRunnable, 60_000L);
+        };
+        uiHandler.postDelayed(table100AutoSyncRunnable, 60_000L);
+    }
+
+    private void stopTable100AutoSync() {
+        if (table100AutoSyncRunnable != null) {
+            uiHandler.removeCallbacks(table100AutoSyncRunnable);
+            table100AutoSyncRunnable = null;
+        }
     }
 
     private void sendOrQueueOutgoing(String address, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt) {
@@ -4356,13 +4453,46 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void updateChatHeaderStatus() {
         String presence = contactPresenceStatus(currentRemoteAddress);
         if (chatAvatarFrame != null) {
-            chatAvatarFrame.setBackground(roundedStroke(surface(), dp(18), presenceColor(presence), dp(4)));
+            chatAvatarFrame.setBackground(ovalStroke(surface(), presenceColor(presence), dp(4)));
         }
         if (chatConnectionIcon != null) {
             chatConnectionIcon.setImageResource(presenceDrawable(presence));
             chatConnectionIcon.setContentDescription(presenceLabel(presence));
             chatConnectionIcon.setBackground(rounded("#FFFFFF", dp(11), "#FFFFFF"));
         }
+        updateChatAvatarSpin();
+    }
+
+    private void updateChatAvatarSpin() {
+        if (chatAvatarFrame == null) {
+            chatAvatarSpinning = false;
+            return;
+        }
+        boolean shouldSpin = "chat".equals(currentScreen)
+                && currentRemoteAddress != null
+                && !currentRemoteAddress.isEmpty()
+                && btChatManager != null
+                && !btChatManager.canSendTo(currentRemoteAddress);
+        if (shouldSpin && !chatAvatarSpinning) {
+            chatAvatarSpinning = true;
+            spinChatAvatarFrame();
+        } else if (!shouldSpin && chatAvatarSpinning) {
+            chatAvatarSpinning = false;
+            chatAvatarFrame.animate().cancel();
+            chatAvatarFrame.setRotation(0f);
+        }
+    }
+
+    private void spinChatAvatarFrame() {
+        if (!chatAvatarSpinning || chatAvatarFrame == null) {
+            return;
+        }
+        chatAvatarFrame.animate()
+                .rotationBy(360f)
+                .setDuration(1200L)
+                .setInterpolator(new LinearInterpolator())
+                .withEndAction(this::spinChatAvatarFrame)
+                .start();
     }
 
     private void updateChatHeaderProfile() {
@@ -5412,13 +5542,40 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 }
                 copyToClipboard(shareUrl, false);
                 Intent intent = new Intent(Intent.ACTION_SEND);
-                intent.setType("text/plain");
                 intent.putExtra(Intent.EXTRA_SUBJECT, subject == null ? "nBTChat" : subject);
                 intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + shareUrl);
+                Uri imageUri = cartelaShareImageUri();
+                if (imageUri != null && GadgetStore.TABLE_100_TITLE.equals(subject)) {
+                    intent.setType("image/png");
+                    intent.putExtra(Intent.EXTRA_STREAM, imageUri);
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } else {
+                    intent.setType("text/plain");
+                }
                 startActivity(Intent.createChooser(intent, chooserTitle == null ? "Compartilhar link" : chooserTitle));
                 Toast.makeText(this, "Link curto copiado.", Toast.LENGTH_SHORT).show();
             });
         }, "nBTChat-short-link").start();
+    }
+
+    private Uri cartelaShareImageUri() {
+        try {
+            File dir = new File(getCacheDir(), "backups");
+            if (!dir.exists() && !dir.mkdirs()) {
+                return null;
+            }
+            File file = new File(dir, "cartela_eventos.png");
+            Bitmap bitmap = BitmapFactory.decodeResource(getResources(), R.drawable.cartela_eventos_bg);
+            if (bitmap == null) {
+                return null;
+            }
+            try (FileOutputStream outputStream = new FileOutputStream(file)) {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream);
+            }
+            return BackupFileProvider.uriFor(this, file);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void showUpdateDialog() {
@@ -5846,15 +6003,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private FrameLayout avatarStatusFrame(UserProfile profile, String presence, int size, int radius, int borderWidth, boolean badge, View.OnClickListener clickListener) {
         FrameLayout frame = new FrameLayout(this);
-        int circleRadius = Math.max(radius, size / 2);
         frame.setPadding(borderWidth, borderWidth, borderWidth, borderWidth);
-        frame.setBackground(roundedStroke(surface(), circleRadius, presenceColor(presence), borderWidth));
+        frame.setBackground(ovalStroke(surface(), presenceColor(presence), borderWidth));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             frame.setClipToOutline(true);
         }
         ImageView avatar = new ImageView(this);
         applyAvatar(avatar, profile);
-        avatar.setBackground(rounded(surfaceAlt(), Math.max(dp(8), circleRadius - borderWidth), surfaceAlt()));
+        avatar.setBackground(ovalStroke(surfaceAlt(), surfaceAlt(), dp(1)));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             avatar.setClipToOutline(true);
         }
@@ -5870,7 +6026,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             ImageView status = new ImageView(this);
             status.setTag("presence");
             status.setImageResource(presenceDrawable(presence));
-            status.setBackground(rounded("#FFFFFF", dp(11), "#FFFFFF"));
+            status.setBackground(ovalStroke("#FFFFFF", "#FFFFFF", dp(1)));
             status.setContentDescription(presenceLabel(presence));
             FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(dp(19), dp(19), Gravity.RIGHT | Gravity.BOTTOM);
             statusParams.setMargins(0, 0, 0, 0);
@@ -5882,14 +6038,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private void applyAvatar(ImageView imageView, UserProfile profile) {
         imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        imageView.setBackground(rounded(surfaceAlt(), dp(18), surfaceAlt()));
+        imageView.setBackground(ovalStroke(surfaceAlt(), surfaceAlt(), dp(1)));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             imageView.setClipToOutline(true);
         }
         imageView.post(() -> {
             int size = Math.min(imageView.getWidth(), imageView.getHeight());
             if (size > 0) {
-                imageView.setBackground(rounded(surfaceAlt(), size / 2, surfaceAlt()));
+                imageView.setBackground(ovalStroke(surfaceAlt(), surfaceAlt(), dp(1)));
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     imageView.setClipToOutline(true);
                 }
@@ -6357,6 +6513,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color(fill));
         drawable.setCornerRadius(radius);
+        drawable.setStroke(strokeWidth, color(stroke));
+        return drawable;
+    }
+
+    private GradientDrawable ovalStroke(String fill, String stroke, int strokeWidth) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.OVAL);
+        drawable.setColor(color(fill));
         drawable.setStroke(strokeWidth, color(stroke));
         return drawable;
     }

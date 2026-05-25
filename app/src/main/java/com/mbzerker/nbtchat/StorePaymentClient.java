@@ -64,12 +64,13 @@ public final class StorePaymentClient {
     }
 
     public CartelaState registerCartela(String tableId, String ownerDeviceId, String ownerName,
-                                        String ownerMessage, String copyText, String ownerContact,
+                                        String title, String ownerMessage, String copyText, String ownerContact,
                                         boolean allowReservations, int reservationHours) throws Exception {
         JSONObject body = new JSONObject();
         body.put("tableId", tableId == null ? "" : tableId);
         body.put("ownerDeviceId", ownerDeviceId == null ? "" : ownerDeviceId);
         body.put("ownerName", ownerName == null ? "" : ownerName);
+        body.put("title", title == null ? "" : title);
         body.put("ownerMessage", ownerMessage == null ? "" : ownerMessage);
         body.put("copyText", copyText == null ? "" : copyText);
         body.put("ownerContact", ownerContact == null ? "" : ownerContact);
@@ -253,6 +254,7 @@ public final class StorePaymentClient {
         public final String tableId;
         public final String ownerDeviceId;
         public final String ownerName;
+        public final String title;
         public final String ownerMessage;
         public final String copyText;
         public final String ownerContact;
@@ -261,12 +263,13 @@ public final class StorePaymentClient {
         public final int reservationHours;
         public final ArrayList<CartelaChoice> choices;
 
-        CartelaState(String tableId, String ownerDeviceId, String ownerName, String ownerMessage,
-                     String copyText, String ownerContact, long expiresAt, boolean allowReservations,
+        CartelaState(String tableId, String ownerDeviceId, String ownerName, String title,
+                     String ownerMessage, String copyText, String ownerContact, long expiresAt, boolean allowReservations,
                      int reservationHours, ArrayList<CartelaChoice> choices) {
             this.tableId = tableId == null ? "" : tableId;
             this.ownerDeviceId = ownerDeviceId == null ? "" : ownerDeviceId;
             this.ownerName = ownerName == null ? "" : ownerName;
+            this.title = title == null ? "" : title;
             this.ownerMessage = ownerMessage == null ? "" : ownerMessage;
             this.copyText = copyText == null ? "" : copyText;
             this.ownerContact = ownerContact == null ? "" : ownerContact;
@@ -278,7 +281,7 @@ public final class StorePaymentClient {
 
         static CartelaState fromJson(JSONObject json) {
             if (json == null) {
-                return new CartelaState("", "", "", "", "", "", 0L, false, 24, new ArrayList<>());
+                return new CartelaState("", "", "", "", "", "", "", 0L, false, 24, new ArrayList<>());
             }
             ArrayList<CartelaChoice> choices = new ArrayList<>();
             JSONArray rawChoices = json.optJSONArray("choices");
@@ -303,6 +306,7 @@ public final class StorePaymentClient {
                     json.optString("tableId", ""),
                     json.optString("ownerDeviceId", ""),
                     json.optString("ownerName", ""),
+                    json.optString("title", ""),
                     json.optString("ownerMessage", ""),
                     json.optString("copyText", ""),
                     json.optString("ownerContact", ""),

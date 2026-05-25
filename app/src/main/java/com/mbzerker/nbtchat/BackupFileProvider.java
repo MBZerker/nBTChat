@@ -30,6 +30,10 @@ public final class BackupFileProvider extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
+        String name = uri == null ? "" : uri.getLastPathSegment();
+        if (name != null && name.toLowerCase().endsWith(".png")) {
+            return "image/png";
+        }
         return "application/zip";
     }
 
