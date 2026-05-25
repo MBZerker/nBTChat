@@ -3851,12 +3851,26 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return container;
         }
 
-        Map<String, Integer> nameCounts = new HashMap<>();
-        Map<String, Integer> nameIndexes = new HashMap<>();
+        Collections.sort(choices, (left, right) -> {
+            int nameCompare = table100ChoiceBaseName(left).compareToIgnoreCase(table100ChoiceBaseName(right));
+            if (nameCompare != 0) {
+                return nameCompare;
+            }
+            return Integer.compare(left.number, right.number);
+        });
+        Map<String, Set<String>> participantsByName = new HashMap<>();
         for (GadgetStore.Table100Choice choice : choices) {
             String base = table100ChoiceBaseName(choice);
-            nameCounts.put(base, nameCounts.containsKey(base) ? nameCounts.get(base) + 1 : 1);
+            Set<String> keys = participantsByName.containsKey(base) ? participantsByName.get(base) : new HashSet<>();
+            keys.add(table100ChoiceParticipantKey(choice));
+            participantsByName.put(base, keys);
         }
+        Map<String, Integer> nameCounts = new HashMap<>();
+        for (Map.Entry<String, Set<String>> entry : participantsByName.entrySet()) {
+            nameCounts.put(entry.getKey(), entry.getValue().size());
+        }
+        Map<String, Integer> nameIndexes = new HashMap<>();
+        Map<String, String> participantLabels = new HashMap<>();
 
         boolean anyPending = false;
         for (GadgetStore.Table100Choice choice : choices) {
@@ -3865,7 +3879,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     container.addView(text("Pendentes", 13, secondary(), Typeface.BOLD), topMargin(dp(12)));
                     anyPending = true;
                 }
-                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes)), topMargin(dp(8)));
+                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes, participantLabels)), topMargin(dp(8)));
             }
         }
 
@@ -3876,7 +3890,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     container.addView(text("Confirmados", 13, secondary(), Typeface.BOLD), topMargin(dp(14)));
                     anyConfirmed = true;
                 }
-                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes)), topMargin(dp(8)));
+                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes, participantLabels)), topMargin(dp(8)));
             }
         }
 
@@ -3887,7 +3901,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     container.addView(text("Removidos", 13, secondary(), Typeface.BOLD), topMargin(dp(14)));
                     anyRemoved = true;
                 }
-                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes)), topMargin(dp(8)));
+                container.addView(table100ChoiceRow(payload, choice, table100ChoiceDisplayName(choice, nameCounts, nameIndexes, participantLabels)), topMargin(dp(8)));
             }
         }
         return container;
@@ -3901,14 +3915,34 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return safeName(profile.isComplete() ? profile.getDisplayName() : (choice.name.isEmpty() ? "Contato" : choice.name), "Contato");
     }
 
-    private String table100ChoiceDisplayName(GadgetStore.Table100Choice choice, Map<String, Integer> counts, Map<String, Integer> indexes) {
+    private String table100ChoiceDisplayName(GadgetStore.Table100Choice choice, Map<String, Integer> counts, Map<String, Integer> indexes, Map<String, String> participantLabels) {
         String base = table100ChoiceBaseName(choice);
         if (counts == null || !counts.containsKey(base) || counts.get(base) <= 1) {
             return base;
         }
+        String participant = table100ChoiceParticipantKey(choice);
+        String labelKey = base + "\n" + participant;
+        if (participantLabels != null && participantLabels.containsKey(labelKey)) {
+            return participantLabels.get(labelKey);
+        }
         int index = indexes.containsKey(base) ? indexes.get(base) + 1 : 1;
         indexes.put(base, index);
-        return base + "(" + index + ")";
+        String label = base + "(" + index + ")";
+        if (participantLabels != null) {
+            participantLabels.put(labelKey, label);
+        }
+        return label;
+    }
+
+    private String table100ChoiceParticipantKey(GadgetStore.Table100Choice choice) {
+        if (choice == null) {
+            return "";
+        }
+        String address = choice.address == null ? "" : choice.address.trim();
+        if (!address.isEmpty()) {
+            return address;
+        }
+        return "choice:" + choice.number + ":" + table100ChoiceBaseName(choice);
     }
 
     private boolean table100HasLocalChoice(GadgetStore.Table100Payload payload) {
