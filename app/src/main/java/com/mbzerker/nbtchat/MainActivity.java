@@ -624,7 +624,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 && "mbzerker.github.io".equalsIgnoreCase(uri.getHost())
                 && uri.getPath() != null
                 && uri.getPath().startsWith("/nBTChat/l");
-        if (!nbtchatShare && !webShare) {
+        boolean shortShare = "https".equalsIgnoreCase(uri.getScheme())
+                && "nbtchat-store.nectof.workers.dev".equalsIgnoreCase(uri.getHost())
+                && uri.getPath() != null
+                && uri.getPath().startsWith("/s/");
+        if (!nbtchatShare && !webShare && !shortShare) {
             return false;
         }
         intent.setData(null);
@@ -638,7 +642,48 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private boolean handleStoreShareDeepLink(Uri uri) {
         try {
+            String code = uri.getQueryParameter("c");
+            if ((code == null || code.trim().isEmpty())
+                    && "https".equalsIgnoreCase(uri.getScheme())
+                    && uri.getPath() != null
+                    && uri.getPath().startsWith("/s/")) {
+                code = uri.getLastPathSegment();
+            }
+            if (code != null && !code.trim().isEmpty()) {
+                String base = uri.getQueryParameter("u");
+                if ((base == null || base.trim().isEmpty()) && "https".equalsIgnoreCase(uri.getScheme())) {
+                    base = uri.getScheme() + "://" + uri.getHost();
+                }
+                fetchAndHandleStoreSharePayload(code, base);
+                return true;
+            }
             JSONObject payload = decodeStoreSharePayload(uri.getQueryParameter("p"));
+            if (payload == null) {
+                Toast.makeText(this, "Link nBTChat invalido.", Toast.LENGTH_LONG).show();
+                return true;
+            }
+            return handleDecodedStoreSharePayload(payload);
+        } catch (Exception ex) {
+            Toast.makeText(this, "Nao foi possivel abrir este link nBTChat.", Toast.LENGTH_LONG).show();
+            return true;
+        }
+    }
+
+    private void fetchAndHandleStoreSharePayload(String code, String baseUrlOverride) {
+        Toast.makeText(this, "Abrindo link nBTChat...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                String encoded = storePaymentClient.getSharePayload(baseUrlOverride, code);
+                JSONObject payload = decodeStoreSharePayload(encoded);
+                runOnUiThread(() -> handleDecodedStoreSharePayload(payload));
+            } catch (Exception ex) {
+                runOnUiThread(() -> Toast.makeText(this, "Nao foi possivel abrir este link nBTChat.", Toast.LENGTH_LONG).show());
+            }
+        }, "nBTChat-open-short-link").start();
+    }
+
+    private boolean handleDecodedStoreSharePayload(JSONObject payload) {
+        try {
             if (payload == null) {
                 Toast.makeText(this, "Link nBTChat invalido.", Toast.LENGTH_LONG).show();
                 return true;
@@ -2521,23 +2566,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, "Configure seu perfil antes de compartilhar.", Toast.LENGTH_LONG).show();
             return;
         }
-        String url = buildStoreShareUrl(MessageStore.KIND_TABLE_100, payload.toMessageBody(), contact);
-        if (url.isEmpty()) {
+        String sharePayload = buildStoreSharePayload(MessageStore.KIND_TABLE_100, payload.toMessageBody(), contact);
+        if (sharePayload.isEmpty()) {
             Toast.makeText(this, "Nao foi possivel criar o link.", Toast.LENGTH_LONG).show();
             return;
         }
-        shareExternalStoreUrl(GadgetStore.TABLE_100_TITLE, url, "Compartilhar item");
+        shareExternalStorePayload(GadgetStore.TABLE_100_TITLE, sharePayload, "Compartilhar item");
     }
 
     private String buildStoreShareUrl(String kind, String body, ContactCardPayload contact) {
+        String encoded = buildStoreSharePayload(kind, body, contact);
+        return encoded.isEmpty() ? "" : DOWNLOAD_PAGE_URL + "l/?p=" + Uri.encode(encoded);
+    }
+
+    private String buildStoreSharePayload(String kind, String body, ContactCardPayload contact) {
         try {
             JSONObject payload = new JSONObject();
             payload.put("v", 1);
             payload.put("kind", kind == null ? "" : kind);
             payload.put("body", body == null ? "" : body);
             payload.put("contact", contact.toJson());
-            String encoded = Base64.encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8), Base64.URL_SAFE | Base64.NO_WRAP);
-            return DOWNLOAD_PAGE_URL + "l/?p=" + Uri.encode(encoded);
+            return Base64.encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8), Base64.URL_SAFE | Base64.NO_WRAP);
         } catch (Exception ignored) {
             return "";
         }
@@ -5048,32 +5097,36 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         String body = table100BodyWithKnownLocks(source.body == null ? "" : source.body);
-        String url = buildStoreShareUrl(source.kind, body, contact);
-        if (url.isEmpty()) {
+        String sharePayload = buildStoreSharePayload(source.kind, body, contact);
+        if (sharePayload.isEmpty()) {
             Toast.makeText(this, "Nao foi possivel criar o link.", Toast.LENGTH_LONG).show();
             return;
         }
-        shareExternalStoreUrl(GadgetStore.TABLE_100_TITLE, url, "Compartilhar link");
+        shareExternalStorePayload(GadgetStore.TABLE_100_TITLE, sharePayload, "Compartilhar link");
     }
 
-    private void shareExternalStoreUrl(String subject, String longUrl, String chooserTitle) {
+    private void shareExternalStorePayload(String subject, String encodedPayload, String chooserTitle) {
         new Thread(() -> {
-            String finalUrl = longUrl;
+            String finalUrl = "";
             try {
                 if (storePaymentClient != null) {
-                    finalUrl = storePaymentClient.shortenUrl(longUrl);
+                    finalUrl = storePaymentClient.createShareLink(encodedPayload);
                 }
             } catch (Exception ignored) {
             }
             String shareUrl = finalUrl;
             runOnUiThread(() -> {
+                if (shareUrl == null || shareUrl.trim().isEmpty()) {
+                    Toast.makeText(this, "Nao foi possivel gerar o link curto. Verifique a internet e tente novamente.", Toast.LENGTH_LONG).show();
+                    return;
+                }
                 copyToClipboard(shareUrl, false);
                 Intent intent = new Intent(Intent.ACTION_SEND);
                 intent.setType("text/plain");
                 intent.putExtra(Intent.EXTRA_SUBJECT, subject == null ? "nBTChat" : subject);
                 intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + shareUrl);
                 startActivity(Intent.createChooser(intent, chooserTitle == null ? "Compartilhar link" : chooserTitle));
-                Toast.makeText(this, shareUrl.equals(longUrl) ? "Link copiado." : "Link curto copiado.", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Link curto copiado.", Toast.LENGTH_SHORT).show();
             });
         }, "nBTChat-short-link").start();
     }

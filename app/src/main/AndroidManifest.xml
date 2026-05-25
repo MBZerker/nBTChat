@@ -51,6 +51,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="mbzerker.github.io" android:pathPrefix="/nBTChat/l" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="nbtchat-store.nectof.workers.dev" android:pathPrefix="/s/" />
+            </intent-filter>
         </activity>
         <activity
             android:name=".QrScannerActivity"

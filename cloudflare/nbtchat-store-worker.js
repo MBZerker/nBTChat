@@ -76,6 +76,53 @@ async function createShortLink(request, env, originUrl) {
   return json({ ok: false, error: "short_code_unavailable" }, 503, SHORT_LINK_CORS_HEADERS);
 }
 
+async function createShareLink(request, env, originUrl) {
+  const data = await readBody(request);
+  const payload = clean(data.payload);
+  if (!isValidSharePayload(payload)) {
+    return json({ ok: false, error: "invalid_payload" }, 400, SHORT_LINK_CORS_HEADERS);
+  }
+
+  const payloadHash = await sha256(`share:${payload}`);
+  const existing = await env.STORE.get(`share:index:${payloadHash}`);
+  if (existing) {
+    return json({ ok: true, code: existing, shortUrl: `${originUrl.origin}/s/${existing}` }, 200, SHORT_LINK_CORS_HEADERS);
+  }
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = randomShortCode(7);
+    if (await env.STORE.get(`short:${code}`)) {
+      continue;
+    }
+    const record = { type: "share", payload, createdAt: Date.now() };
+    await env.STORE.put(`short:${code}`, JSON.stringify(record));
+    await env.STORE.put(`share:index:${payloadHash}`, code);
+    return json({ ok: true, code, shortUrl: `${originUrl.origin}/s/${code}` }, 200, SHORT_LINK_CORS_HEADERS);
+  }
+
+  return json({ ok: false, error: "short_code_unavailable" }, 503, SHORT_LINK_CORS_HEADERS);
+}
+
+async function sharePayload(env, url) {
+  const code = clean(url.pathname.replace(/^\/share\//, "")).replace(/[^A-Za-z0-9]/g, "");
+  if (!code) {
+    return json({ ok: false, error: "invalid_code" }, 400, SHORT_LINK_CORS_HEADERS);
+  }
+  const raw = await env.STORE.get(`short:${code}`);
+  if (!raw) {
+    return json({ ok: false, error: "not_found" }, 404, SHORT_LINK_CORS_HEADERS);
+  }
+  try {
+    const record = JSON.parse(raw);
+    if (record.type !== "share" || !isValidSharePayload(record.payload)) {
+      return json({ ok: false, error: "invalid_share" }, 400, SHORT_LINK_CORS_HEADERS);
+    }
+    return json({ ok: true, code, payload: record.payload }, 200, SHORT_LINK_CORS_HEADERS);
+  } catch (_) {
+    return json({ ok: false, error: "invalid_share" }, 500, SHORT_LINK_CORS_HEADERS);
+  }
+}
+
 async function shortRedirect(env, url) {
   const code = clean(url.pathname.replace(/^\/s\//, "")).replace(/[^A-Za-z0-9]/g, "");
   if (!code) {
@@ -87,6 +134,9 @@ async function shortRedirect(env, url) {
   }
   try {
     const record = JSON.parse(raw);
+    if (record.type === "share" && isValidSharePayload(record.payload)) {
+      return shareLandingPage(url, code);
+    }
     const target = clean(record.url);
     if (!isAllowedShortTarget(target, url.origin)) {
       return resultHtml("Link bloqueado", "Este destino nao e permitido.", false, 400);
@@ -101,6 +151,41 @@ async function shortRedirect(env, url) {
   } catch (_) {
     return resultHtml("Link corrompido", "Nao foi possivel abrir este link.", false, 500);
   }
+}
+
+function shareLandingPage(url, code) {
+  const appUrl = `nbtchat://share?c=${encodeURIComponent(code)}&u=${encodeURIComponent(url.origin)}`;
+  return html(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Abrir no nBTChat</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f7f5; color: #17212b; font-family: Arial, sans-serif; }
+    main { width: min(92vw, 430px); background: white; border: 1px solid #d7ddd8; border-radius: 18px; padding: 24px; box-shadow: 0 16px 50px #0002; }
+    .badge { width: 68px; height: 68px; border-radius: 20px; display: grid; place-items: center; background: #ddf7e8; color: #16a34a; font-size: 32px; margin-bottom: 14px; font-weight: 900; }
+    h1 { margin: 0; font-size: 28px; }
+    p { color: #52606d; line-height: 1.45; }
+    a { display: block; text-align: center; text-decoration: none; border-radius: 14px; padding: 14px; margin-top: 12px; font-weight: 900; }
+    .primary { background: #16a34a; color: white; }
+    .secondary { background: #edf2f0; color: #17212b; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="badge">nB</div>
+    <h1>Abrir item no nBTChat</h1>
+    <p>Se o app estiver instalado, abra o contato e o item compartilhado. Se ainda nao tiver, baixe o APK e volte por este link.</p>
+    <a id="openApp" class="primary" href="${escapeHtml(appUrl)}">Abrir no nBTChat</a>
+    <a class="secondary" href="https://mbzerker.github.io/nBTChat/nBTChat.apk">Baixar nBTChat</a>
+  </main>
+  <script>
+    const appUrl = ${JSON.stringify(appUrl)};
+    setTimeout(() => { location.href = appUrl; }, 350);
+  </script>
+</body>
+</html>`);
 }
 
 function isAllowedShortTarget(target, workerOrigin) {
@@ -118,6 +203,23 @@ function isAllowedShortTarget(target, workerOrigin) {
   } catch (_) {
   }
   return false;
+}
+
+function isValidSharePayload(payload) {
+  if (!payload || payload.length > 120000 || !/^[A-Za-z0-9_-]+={0,2}$/.test(payload)) {
+    return false;
+  }
+  try {
+    let normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    while (normalized.length % 4 !== 0) {
+      normalized += "=";
+    }
+    const jsonText = atob(normalized);
+    const parsed = JSON.parse(jsonText);
+    return parsed && Number(parsed.v) === 1 && typeof parsed.kind === "string" && typeof parsed.body === "string";
+  } catch (_) {
+    return false;
+  }
 }
 
 function randomShortCode(length) {
@@ -276,11 +378,17 @@ export default {
       if (request.method === "POST" && url.pathname === "/admin/products") {
         return saveAdminProducts(request, env);
       }
-      if (request.method === "OPTIONS" && url.pathname === "/shorten") {
+      if (request.method === "OPTIONS" && (url.pathname === "/shorten" || url.pathname === "/share-link" || url.pathname.startsWith("/share/"))) {
         return new Response(null, { status: 204, headers: SHORT_LINK_CORS_HEADERS });
       }
       if (request.method === "POST" && url.pathname === "/shorten") {
         return createShortLink(request, env, url);
+      }
+      if (request.method === "POST" && url.pathname === "/share-link") {
+        return createShareLink(request, env, url);
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/share/")) {
+        return sharePayload(env, url);
       }
       if (request.method === "GET" && url.pathname.startsWith("/s/")) {
         return shortRedirect(env, url);

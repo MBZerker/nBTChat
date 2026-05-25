@@ -24,6 +24,8 @@ Worker publico usado pela loja do nBTChat.
 - `POST /admin/login` e `POST /admin/products`: login e salvamento da area ADM.
 - `POST /shorten`: recebe `{ "url": "https://mbzerker.github.io/nBTChat/..." }` ou link do CompraLink e devolve `{ shortUrl }`.
 - `GET /s/:codigo`: abre o link encurtado.
+- `POST /share-link`: recebe um payload de compartilhamento do nBTChat e devolve um link curto `/s/:codigo` sem colocar o payload na URL.
+- `GET /share/:codigo`: usado pelo app para recuperar o payload do item compartilhado.
 
 O app nao precisa carregar chave secreta. Nome e CPF ficam no fluxo do Worker/Mercado Pago; o app envia apenas o `deviceId` pseudonimo e consulta a liberacao. O codigo de recuperacao e mostrado antes do pagamento e deve ser guardado pelo comprador.
 

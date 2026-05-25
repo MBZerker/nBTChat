@@ -39,6 +39,19 @@ public final class StorePaymentClient {
         return shortUrl.trim().isEmpty() ? longUrl : shortUrl;
     }
 
+    public String createShareLink(String encodedPayload) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("payload", encodedPayload == null ? "" : encodedPayload);
+        JSONObject json = post("/share-link", body);
+        return json.optString("shortUrl", "");
+    }
+
+    public String getSharePayload(String baseUrlOverride, String code) throws Exception {
+        String cleanBase = trimTrailingSlash(baseUrlOverride == null || baseUrlOverride.trim().isEmpty() ? baseUrl : baseUrlOverride);
+        JSONObject json = requestAbsolute(cleanBase + "/share/" + enc(code));
+        return json.optString("payload", "");
+    }
+
     public Entitlement getCartelaEntitlement(String deviceId) throws Exception {
         String path = "/entitlement?deviceId=" + enc(deviceId) + "&productId=" + enc(PRODUCT_CARTELA_EVENTOS);
         JSONObject json = request(path);
@@ -100,9 +113,13 @@ public final class StorePaymentClient {
     }
 
     private JSONObject request(String path) throws Exception {
+        return requestAbsolute(baseUrl + path);
+    }
+
+    private JSONObject requestAbsolute(String urlValue) throws Exception {
         HttpURLConnection connection = null;
         try {
-            URL url = new URL(baseUrl + path);
+            URL url = new URL(urlValue);
             connection = (HttpURLConnection) url.openConnection();
             connection.setConnectTimeout(12000);
             connection.setReadTimeout(12000);
