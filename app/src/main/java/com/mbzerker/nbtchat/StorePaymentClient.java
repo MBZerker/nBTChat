@@ -31,6 +31,14 @@ public final class StorePaymentClient {
         return Uri.parse(baseUrl + "/recover?productId=" + PRODUCT_CARTELA_EVENTOS + "&deviceId=" + Uri.encode(deviceId));
     }
 
+    public String shortenUrl(String longUrl) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("url", longUrl == null ? "" : longUrl);
+        JSONObject json = post("/shorten", body);
+        String shortUrl = json.optString("shortUrl", "");
+        return shortUrl.trim().isEmpty() ? longUrl : shortUrl;
+    }
+
     public Entitlement getCartelaEntitlement(String deviceId) throws Exception {
         String path = "/entitlement?deviceId=" + enc(deviceId) + "&productId=" + enc(PRODUCT_CARTELA_EVENTOS);
         JSONObject json = request(path);

@@ -8,6 +8,12 @@ const PRODUCTS = {
   },
 };
 
+const SHORT_LINK_CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "content-type",
+};
+
 async function getProducts(env) {
   const defaults = JSON.parse(JSON.stringify(PRODUCTS));
   try {
@@ -39,6 +45,90 @@ function normalizeProduct(product, fallback) {
     durationDays: clampInt(product.durationDays, base.durationDays, 1, 365),
     footer: clean(product.footer || base.footer),
   };
+}
+
+async function createShortLink(request, env, originUrl) {
+  const data = await readBody(request);
+  const target = clean(data.url);
+  if (!isAllowedShortTarget(target, originUrl.origin)) {
+    return json({ ok: false, error: "invalid_url" }, 400, SHORT_LINK_CORS_HEADERS);
+  }
+
+  const normalized = new URL(target).toString();
+  const targetHash = await sha256(`short:${normalized}`);
+  const existing = await env.STORE.get(`short:index:${targetHash}`);
+  if (existing) {
+    return json({ ok: true, code: existing, shortUrl: `${originUrl.origin}/s/${existing}`, url: normalized }, 200, SHORT_LINK_CORS_HEADERS);
+  }
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = randomShortCode(7);
+    const key = `short:${code}`;
+    if (await env.STORE.get(key)) {
+      continue;
+    }
+    const record = { url: normalized, createdAt: Date.now() };
+    await env.STORE.put(key, JSON.stringify(record));
+    await env.STORE.put(`short:index:${targetHash}`, code);
+    return json({ ok: true, code, shortUrl: `${originUrl.origin}/s/${code}`, url: normalized }, 200, SHORT_LINK_CORS_HEADERS);
+  }
+
+  return json({ ok: false, error: "short_code_unavailable" }, 503, SHORT_LINK_CORS_HEADERS);
+}
+
+async function shortRedirect(env, url) {
+  const code = clean(url.pathname.replace(/^\/s\//, "")).replace(/[^A-Za-z0-9]/g, "");
+  if (!code) {
+    return resultHtml("Link invalido", "Este link curto nao esta completo.", false, 400);
+  }
+  const raw = await env.STORE.get(`short:${code}`);
+  if (!raw) {
+    return resultHtml("Link nao encontrado", "Este link curto nao existe ou expirou.", false, 404);
+  }
+  try {
+    const record = JSON.parse(raw);
+    const target = clean(record.url);
+    if (!isAllowedShortTarget(target, url.origin)) {
+      return resultHtml("Link bloqueado", "Este destino nao e permitido.", false, 400);
+    }
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: target,
+        "cache-control": "no-store",
+      },
+    });
+  } catch (_) {
+    return resultHtml("Link corrompido", "Nao foi possivel abrir este link.", false, 500);
+  }
+}
+
+function isAllowedShortTarget(target, workerOrigin) {
+  try {
+    const parsed = new URL(target);
+    if (parsed.origin === workerOrigin && (parsed.pathname.startsWith("/checkout") || parsed.pathname.startsWith("/recover"))) {
+      return true;
+    }
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    if (parsed.hostname === "mbzerker.github.io") {
+      return parsed.pathname.startsWith("/nBTChat/") || parsed.pathname.startsWith("/CompraLink/");
+    }
+  } catch (_) {
+  }
+  return false;
+}
+
+function randomShortCode(length) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let code = "";
+  for (const byte of bytes) {
+    code += alphabet[byte % alphabet.length];
+  }
+  return code;
 }
 
 function adminKey(env) {
@@ -185,6 +275,15 @@ export default {
       }
       if (request.method === "POST" && url.pathname === "/admin/products") {
         return saveAdminProducts(request, env);
+      }
+      if (request.method === "OPTIONS" && url.pathname === "/shorten") {
+        return new Response(null, { status: 204, headers: SHORT_LINK_CORS_HEADERS });
+      }
+      if (request.method === "POST" && url.pathname === "/shorten") {
+        return createShortLink(request, env, url);
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/s/")) {
+        return shortRedirect(env, url);
       }
       if (request.method === "GET" && url.pathname === "/checkout") {
         return checkoutPage(url, env);
@@ -889,10 +988,10 @@ function isFormRequest(request) {
     || (request.headers.get("content-type") || "").includes("multipart/form-data");
 }
 
-function json(value, status = 200) {
+function json(value, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", ...extraHeaders },
   });
 }
 

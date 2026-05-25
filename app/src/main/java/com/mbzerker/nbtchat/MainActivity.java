@@ -2526,13 +2526,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, "Nao foi possivel criar o link.", Toast.LENGTH_LONG).show();
             return;
         }
-        copyToClipboard(url, false);
-        Intent intent = new Intent(Intent.ACTION_SEND);
-        intent.setType("text/plain");
-        intent.putExtra(Intent.EXTRA_SUBJECT, GadgetStore.TABLE_100_TITLE);
-        intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + url);
-        startActivity(Intent.createChooser(intent, "Compartilhar item"));
-        Toast.makeText(this, "Link copiado.", Toast.LENGTH_SHORT).show();
+        shareExternalStoreUrl(GadgetStore.TABLE_100_TITLE, url, "Compartilhar item");
     }
 
     private String buildStoreShareUrl(String kind, String body, ContactCardPayload contact) {
@@ -5059,13 +5053,29 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, "Nao foi possivel criar o link.", Toast.LENGTH_LONG).show();
             return;
         }
-        copyToClipboard(url, false);
-        Intent intent = new Intent(Intent.ACTION_SEND);
-        intent.setType("text/plain");
-        intent.putExtra(Intent.EXTRA_SUBJECT, GadgetStore.TABLE_100_TITLE);
-        intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + url);
-        startActivity(Intent.createChooser(intent, "Compartilhar link"));
-        Toast.makeText(this, "Link copiado.", Toast.LENGTH_SHORT).show();
+        shareExternalStoreUrl(GadgetStore.TABLE_100_TITLE, url, "Compartilhar link");
+    }
+
+    private void shareExternalStoreUrl(String subject, String longUrl, String chooserTitle) {
+        new Thread(() -> {
+            String finalUrl = longUrl;
+            try {
+                if (storePaymentClient != null) {
+                    finalUrl = storePaymentClient.shortenUrl(longUrl);
+                }
+            } catch (Exception ignored) {
+            }
+            String shareUrl = finalUrl;
+            runOnUiThread(() -> {
+                copyToClipboard(shareUrl, false);
+                Intent intent = new Intent(Intent.ACTION_SEND);
+                intent.setType("text/plain");
+                intent.putExtra(Intent.EXTRA_SUBJECT, subject == null ? "nBTChat" : subject);
+                intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + shareUrl);
+                startActivity(Intent.createChooser(intent, chooserTitle == null ? "Compartilhar link" : chooserTitle));
+                Toast.makeText(this, shareUrl.equals(longUrl) ? "Link copiado." : "Link curto copiado.", Toast.LENGTH_SHORT).show();
+            });
+        }, "nBTChat-short-link").start();
     }
 
     private void showUpdateDialog() {

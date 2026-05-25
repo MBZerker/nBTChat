@@ -22,5 +22,9 @@ Worker publico usado pela loja do nBTChat.
 - `POST /cartela/delete-choice`: dono remove um participante e libera o numero.
 - `GET /admin`: area ADM para configurar itens oficiais da loja.
 - `POST /admin/login` e `POST /admin/products`: login e salvamento da area ADM.
+- `POST /shorten`: recebe `{ "url": "https://mbzerker.github.io/nBTChat/..." }` ou link do CompraLink e devolve `{ shortUrl }`.
+- `GET /s/:codigo`: abre o link encurtado.
 
 O app nao precisa carregar chave secreta. Nome e CPF ficam no fluxo do Worker/Mercado Pago; o app envia apenas o `deviceId` pseudonimo e consulta a liberacao. O codigo de recuperacao e mostrado antes do pagamento e deve ser guardado pelo comprador.
+
+O encurtador aceita apenas destinos conhecidos dos projetos `nBTChat` e `CompraLink` no GitHub Pages, alem das paginas internas de compra/recuperacao do proprio Worker. Isso evita que o dominio seja usado como encurtador aberto para links de terceiros.
