@@ -1,9 +1,9 @@
 {
-  "versionCode": 42,
-  "versionName": "0.4.20",
+  "versionCode": 43,
+  "versionName": "0.4.21",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.20.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.21.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Reduz disputa de conexao Bluetooth entre aparelhos pareados; ajusta a animacao de loading na borda da foto."
+  "changelog": "Corrige a tentativa de conexao Bluetooth entre aparelhos pareados e suaviza a animacao de loading da borda."
 }

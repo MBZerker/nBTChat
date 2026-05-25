@@ -98,7 +98,6 @@ public final class BtChatManager {
     private ConnectedThread connectedThread;
     private boolean receiverRegistered;
     private boolean nearbyDiscoveryMode;
-    private long lastDeferredConnectAt;
     private final Set<String> pendingServiceChecks = new HashSet<>();
     private final Map<String, BluetoothDevice> serviceCheckDevices = new HashMap<>();
 
@@ -407,29 +406,11 @@ public final class BtChatManager {
 
     @SuppressLint("MissingPermission")
     public void connect(DeviceCandidate candidate) {
-        connect(candidate, true);
-    }
-
-    @SuppressLint("MissingPermission")
-    private void connect(DeviceCandidate candidate, boolean allowYield) {
         if (candidate == null || candidate.device == null) {
             return;
         }
         String address = candidate.address == null || candidate.address.isEmpty() ? safeAddress(candidate.device) : candidate.address;
         if (isConnectedTo(address)) {
-            return;
-        }
-        if (allowYield && shouldYieldOutgoingConnection(address)) {
-            long now = System.currentTimeMillis();
-            if (now - lastDeferredConnectAt > 5000L) {
-                lastDeferredConnectAt = now;
-                postState("Aguardando o outro aparelho concluir a conexao Bluetooth...");
-                mainHandler.postDelayed(() -> {
-                    if (!isConnectedTo(address)) {
-                        connect(candidate, false);
-                    }
-                }, 2600L);
-            }
             return;
         }
         if (connectThread != null) {
@@ -444,19 +425,6 @@ public final class BtChatManager {
         postState("Conectando com " + candidate.name + "...");
         connectThread = new ConnectThread(candidate.device);
         connectThread.start();
-    }
-
-    private boolean shouldYieldOutgoingConnection(String remoteAddress) {
-        if (remoteAddress == null || remoteAddress.isEmpty()) {
-            return false;
-        }
-        ProfileStore.ContactIdentity identity = profileStore.loadIdentity(remoteAddress);
-        String remoteDeviceId = identity.deviceId == null ? "" : identity.deviceId.trim();
-        String localDeviceId = identityStore.getDeviceId();
-        if (remoteDeviceId.isEmpty() || localDeviceId == null || localDeviceId.trim().isEmpty()) {
-            return false;
-        }
-        return localDeviceId.compareTo(remoteDeviceId) > 0;
     }
 
     public void sendMessage(String body) {
