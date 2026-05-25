@@ -406,7 +406,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     public void onBackPressed() {
         if ("chat".equals(currentScreen)) {
             leaveChatToHome();
-        } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen)) {
+        } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen) || "share_targets".equals(currentScreen)) {
             showHomeScreen();
         } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen)) {
             showStoreScreen();
@@ -693,9 +693,19 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 Toast.makeText(this, "Este link nao tem dados de contato validos.", Toast.LENGTH_LONG).show();
                 return true;
             }
-            saveSharedContact(contact);
             String kind = payload.optString("kind", "");
             String body = payload.optString("body", "");
+            if (isLocalContactPayload(contact)) {
+                if (!kind.trim().isEmpty() && !body.trim().isEmpty()) {
+                    showShareTargetScreen("Compartilhar item", "Nenhum contato nBTChat para receber este item.", new HashSet<>(),
+                            address -> sharePayloadToContact(address, kind, body));
+                    Toast.makeText(this, "Escolha um contato para compartilhar.", Toast.LENGTH_SHORT).show();
+                    return true;
+                }
+                showHomeScreen();
+                return true;
+            }
+            saveSharedContact(contact);
             if (!kind.trim().isEmpty() && !body.trim().isEmpty()) {
                 String id = "link-" + Integer.toHexString((contact.address + kind + body).hashCode());
                 messageStore.addMessage(contact.address, id, kind, body, "", 0L,
@@ -715,6 +725,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, "Nao foi possivel abrir este link nBTChat.", Toast.LENGTH_LONG).show();
             return true;
         }
+    }
+
+    private boolean isLocalContactPayload(ContactCardPayload contact) {
+        if (contact == null) {
+            return false;
+        }
+        String localDeviceId = identityStore == null ? "" : identityStore.getDeviceId();
+        if (!localDeviceId.trim().isEmpty() && localDeviceId.equals(contact.deviceId)) {
+            return true;
+        }
+        String localAddress = btChatManager == null ? "" : btChatManager.localBluetoothAddress();
+        return !localAddress.trim().isEmpty() && localAddress.equals(contact.address);
     }
 
     private JSONObject decodeStoreSharePayload(String encoded) throws JSONException {
@@ -2157,39 +2179,116 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         pendingSharedKind = payload.kind;
         pendingSharedBody = payload.body;
         pendingSharedMediaBase64 = payload.mediaBase64;
-        if ("chat".equals(currentScreen) && currentRemoteAddress != null && !currentRemoteAddress.isEmpty()) {
-            new AlertDialog.Builder(this)
-                    .setTitle("Enviar imagem?")
-                    .setMessage("Enviar este item para " + safeName(currentRemoteProfile.getDisplayName(), "este contato") + "?")
-                    .setPositiveButton("Enviar", (dialog, which) -> sendPendingSharedMediaTo(currentRemoteAddress))
-                    .setNegativeButton("Escolher contato", (dialog, which) -> showPendingSharedMediaChooser())
-                    .show();
-        } else {
-            showPendingSharedMediaChooser();
-        }
+        showPendingSharedMediaChooser();
     }
 
     private void showPendingSharedMediaChooser() {
         if (pendingSharedMediaBase64.isEmpty()) {
             return;
         }
+        showShareTargetScreen("Compartilhar imagem", "Nenhum contato nBTChat para receber a imagem.", new HashSet<>(), this::sendPendingSharedMediaTo);
+    }
+
+    private void showShareTargetScreen(String title, String emptyMessage, Set<String> excludedAddresses, ShareTargetAction action) {
+        currentScreen = "share_targets";
+        messageList = null;
+
+        Set<String> excluded = excludedAddresses == null ? new HashSet<>() : excludedAddresses;
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(12));
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showHomeScreen()));
+        TextView titleView = text(title == null || title.trim().isEmpty() ? "Compartilhar com" : title, 27, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(titleView, titleParams);
+        root.addView(top);
+
+        TextView subtitle = text("Escolha um contato salvo para receber o compartilhamento.", 14, secondary(), Typeface.NORMAL);
+        root.addView(subtitle, topMargin(dp(8)));
+
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout list = vertical();
+        list.setPadding(0, dp(12), 0, dp(20));
+        scrollView.addView(list);
+        root.addView(scrollView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1
+        ));
+
         Map<String, UserProfile> contacts = profileStore.loadContacts();
-        List<String> addresses = new ArrayList<>();
-        List<String> names = new ArrayList<>();
+        boolean any = false;
         for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
-            addresses.add(entry.getKey());
+            String address = entry.getKey();
+            if (address == null || address.trim().isEmpty() || excluded.contains(address) || isLocalContactRecord(address)) {
+                continue;
+            }
+            any = true;
             UserProfile profile = entry.getValue();
-            names.add(safeName(profile.isComplete() ? profile.getDisplayName() : "Contato nBTChat", "Contato"));
+            list.addView(shareTargetRow(address, profile, action), topMargin(dp(8)));
         }
-        if (addresses.isEmpty()) {
-            Toast.makeText(this, "Nenhum contato nBTChat para receber a imagem.", Toast.LENGTH_LONG).show();
-            return;
+
+        if (!any) {
+            TextView empty = text(emptyMessage == null ? "Nenhum contato disponivel." : emptyMessage, 15, secondary(), Typeface.NORMAL);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(18), dp(34), dp(18), dp(34));
+            empty.setBackground(rounded(surface(), dp(16), border()));
+            list.addView(empty, topMargin(dp(12)));
         }
-        new AlertDialog.Builder(this)
-                .setTitle("Compartilhar imagem com")
-                .setItems(names.toArray(new String[0]), (dialog, which) -> sendPendingSharedMediaTo(addresses.get(which)))
-                .setNegativeButton("Cancelar", null)
-                .show();
+
+        setContentView(root);
+        requestInsets(root);
+    }
+
+    private View shareTargetRow(String address, UserProfile profile, ShareTargetAction action) {
+        LinearLayout row = horizontal();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setBackground(rounded(surface(), dp(16), border()));
+
+        row.addView(avatarStatusFrame(profile, contactPresenceStatus(address), dp(54), dp(27), dp(3), false, null));
+
+        LinearLayout texts = vertical();
+        String name = profile != null && profile.isComplete() ? profile.getDisplayName() : "Contato nBTChat";
+        texts.addView(text(safeName(name, "Contato"), 17, primary(), Typeface.BOLD));
+        TextView hint = text("Enviar para esta conversa", 13, secondary(), Typeface.NORMAL);
+        texts.addView(hint, topMargin(dp(2)));
+        LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        textParams.setMargins(dp(12), 0, dp(10), 0);
+        row.addView(texts, textParams);
+
+        ImageView sendIcon = new ImageView(this);
+        sendIcon.setImageResource(R.drawable.ic_send_24);
+        sendIcon.setColorFilter(color("#16A34A"));
+        row.addView(sendIcon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+
+        row.setOnClickListener(v -> {
+            if (action != null) {
+                action.send(address);
+            }
+        });
+        return row;
+    }
+
+    private boolean isLocalContactRecord(String address) {
+        String localAddress = btChatManager == null ? "" : btChatManager.localBluetoothAddress();
+        if (!localAddress.trim().isEmpty() && localAddress.equals(address)) {
+            return true;
+        }
+        if (address != null && address.startsWith("nbt-") && identityStore != null && address.equals("nbt-" + identityStore.getDeviceId())) {
+            return true;
+        }
+        try {
+            ProfileStore.ContactIdentity identity = profileStore.loadIdentity(address);
+            String localDeviceId = identityStore == null ? "" : identityStore.getDeviceId();
+            return identity != null && !localDeviceId.trim().isEmpty() && localDeviceId.equals(identity.deviceId);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void sendPendingSharedMediaTo(String address) {
@@ -2204,9 +2303,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         pendingSharedBody = "";
         pendingSharedMediaBase64 = "";
         Toast.makeText(this, "Imagem compartilhada no nBTChat.", Toast.LENGTH_SHORT).show();
-        if ("home".equals(currentScreen)) {
-            renderContactList();
-        }
+        openSharedChat(address);
     }
 
     private void sendVoiceMessage(String audioBase64, long durationMs) {
@@ -2245,9 +2342,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         messageStore.addMessage(address, id, MessageStore.KIND_TABLE_100, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
         sendOrQueueOutgoing(address, id, MessageStore.KIND_TABLE_100, body, "", 0L, sentAt);
         Toast.makeText(this, "Cartela de eventos enviada.", Toast.LENGTH_SHORT).show();
-        if ("home".equals(currentScreen)) {
-            renderContactList();
-        }
+        openSharedChat(address);
     }
 
     private GadgetStore.Table100Payload table100PayloadWithKnownLocks(GadgetStore.Table100Payload payload) {
@@ -2602,25 +2697,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showTable100ConfigScreen();
             return;
         }
-        Map<String, UserProfile> contacts = profileStore.loadContacts();
-        List<String> addresses = new ArrayList<>();
-        List<String> names = new ArrayList<>();
-        for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
-            if (btChatManager.getPairedCandidate(entry.getKey()) == null) {
-                continue;
-            }
-            addresses.add(entry.getKey());
-            UserProfile profile = entry.getValue();
-            names.add(safeName(profile.isComplete() ? profile.getDisplayName() : "Contato", "Contato"));
-        }
-        if (addresses.isEmpty()) {
-            Toast.makeText(this, "Nenhum contato pareado para compartilhar.", Toast.LENGTH_LONG).show();
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Compartilhar " + GadgetStore.TABLE_100_TITLE)
-                .setItems(names.toArray(new String[0]), (dialog, which) -> sendTable100ToAddress(addresses.get(which)))
-                .show();
+        showShareTargetScreen("Compartilhar " + GadgetStore.TABLE_100_TITLE,
+                "Nenhum contato nBTChat para receber a Cartela de eventos.",
+                new HashSet<>(),
+                this::sendTable100ToAddress);
     }
 
     private void showTable100ConfigScreen() {
@@ -4808,27 +4888,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, "Nao tenho dados suficientes desse contato para compartilhar.", Toast.LENGTH_LONG).show();
             return;
         }
-        Map<String, UserProfile> contacts = profileStore.loadContacts();
-        List<String> addresses = new ArrayList<>();
-        List<String> names = new ArrayList<>();
-        for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
-            String address = entry.getKey();
-            if (address.equals(sourceAddress)) {
-                continue;
-            }
-            addresses.add(address);
-            UserProfile profile = entry.getValue();
-            names.add(safeName(profile.isComplete() ? profile.getDisplayName() : "Contato nBTChat", "Contato"));
-        }
-        if (addresses.isEmpty()) {
-            Toast.makeText(this, "Nenhum outro contato para receber este contato.", Toast.LENGTH_LONG).show();
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Compartilhar " + safeName(payload.name, "Contato"))
-                .setItems(names.toArray(new String[0]), (dialog, which) -> sendContactCardToAddress(addresses.get(which), payload))
-                .setNegativeButton("Cancelar", null)
-                .show();
+        Set<String> excluded = new HashSet<>();
+        excluded.add(sourceAddress);
+        showShareTargetScreen("Compartilhar " + safeName(payload.name, "Contato"),
+                "Nenhum outro contato para receber este contato.",
+                excluded,
+                address -> sendContactCardToAddress(address, payload));
     }
 
     private ContactCardPayload contactCardPayload(String sourceAddress) {
@@ -4880,9 +4945,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         messageStore.addMessage(address, id, MessageStore.KIND_CONTACT_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
         sendOrQueueOutgoing(address, id, MessageStore.KIND_CONTACT_INVITE, body, "", 0L, sentAt);
         Toast.makeText(this, "Contato compartilhado no nBTChat.", Toast.LENGTH_SHORT).show();
-        if ("home".equals(currentScreen)) {
-            renderContactList();
-        }
+        openSharedChat(address);
     }
 
     private void removeContactCompletely(String address) {
@@ -5049,25 +5112,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showInternalShareChooser(MessageStore.ChatMessage source) {
-        Map<String, UserProfile> contacts = profileStore.loadContacts();
-        List<String> addresses = new ArrayList<>();
-        List<String> names = new ArrayList<>();
-        for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
-            if (entry.getKey().equals(currentRemoteAddress)) {
-                continue;
-            }
-            addresses.add(entry.getKey());
-            UserProfile profile = entry.getValue();
-            names.add(profile.isComplete() ? profile.getDisplayName() : "Contato nBTChat");
-        }
-        if (addresses.isEmpty()) {
-            Toast.makeText(this, "Nenhum outro contato nBTChat para compartilhar.", Toast.LENGTH_LONG).show();
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Compartilhar com")
-                .setItems(names.toArray(new String[0]), (dialog, which) -> shareMessageToContact(addresses.get(which), source))
-                .show();
+        Set<String> excluded = new HashSet<>();
+        excluded.add(currentRemoteAddress);
+        showShareTargetScreen("Compartilhar com",
+                "Nenhum outro contato nBTChat para compartilhar.",
+                excluded,
+                address -> shareMessageToContact(address, source));
     }
 
     private void shareMessageToContact(String address, MessageStore.ChatMessage source) {
@@ -5081,9 +5131,34 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         messageStore.addMessage(address, id, source.kind, body, media, source.durationMs, true, sentAt, MessageStore.STATUS_PENDING, false);
         sendOrQueueOutgoing(address, id, source.kind, body, media, source.durationMs, sentAt);
         Toast.makeText(this, "Mensagem compartilhada no nBTChat.", Toast.LENGTH_SHORT).show();
-        if ("home".equals(currentScreen)) {
-            renderContactList();
+        openSharedChat(address);
+    }
+
+    private void sharePayloadToContact(String address, String kind, String body) {
+        if (address == null || address.trim().isEmpty() || kind == null || kind.trim().isEmpty()) {
+            return;
         }
+        String finalBody = body == null ? "" : body;
+        if (MessageStore.KIND_TABLE_100.equals(kind)) {
+            finalBody = table100BodyWithKnownLocks(finalBody);
+        }
+        long sentAt = System.currentTimeMillis();
+        String id = messageStore.createId();
+        messageStore.addMessage(address, id, kind, finalBody, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
+        sendOrQueueOutgoing(address, id, kind, finalBody, "", 0L, sentAt);
+        Toast.makeText(this, "Item compartilhado no nBTChat.", Toast.LENGTH_SHORT).show();
+        openSharedChat(address);
+    }
+
+    private void openSharedChat(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        currentRemoteAddress = address;
+        UserProfile profile = profileStore.loadContact(address);
+        currentRemoteProfile = profile.isComplete() ? profile : new UserProfile("Contato nBTChat", "", UserProfile.GENDER_OTHER, "");
+        currentFingerprint = profileStore.loadFingerprint(address);
+        showChatScreen(currentRemoteProfile, currentFingerprint);
     }
 
     private void shareMessageExternalLink(MessageStore.ChatMessage source) {
@@ -5763,6 +5838,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             this.address = address;
             this.id = id;
         }
+    }
+
+    private interface ShareTargetAction {
+        void send(String address);
     }
 
     private static final class VoiceControls {
