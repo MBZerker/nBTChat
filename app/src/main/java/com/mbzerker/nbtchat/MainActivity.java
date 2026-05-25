@@ -154,6 +154,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final long PENDING_REPAIR_DELAY_MS = 30_000L;
     private static final long WAKE_THROTTLE_MS = 30_000L;
     private static final long PAIR_REPAIR_THROTTLE_MS = 5L * 60L * 1000L;
+    private static final long UPDATE_CHECK_INTERVAL_MS = 60_000L;
 
     private final Map<String, BtChatManager.DeviceCandidate> discoveredDevices = new LinkedHashMap<>();
     private final Map<String, TextView> receiptViews = new LinkedHashMap<>();
@@ -225,6 +226,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String playingVoiceId = "";
     private VoiceControls playingVoiceControls;
     private Runnable voiceTicker;
+    private Runnable updateCheckRunnable;
     private long lastDiscoverableRequestAt;
     private final Set<String> onlineAddresses = new HashSet<>();
     private final Map<String, String> contactPresence = new HashMap<>();
@@ -279,7 +281,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         registerMessageReceiver();
         applySystemBars();
-        checkForUpdates(false);
+        startPeriodicUpdateChecks(true);
 
         if (!settingsStore.termsAccepted(TERMS_VERSION) && !profileStore.hasLocalProfile()) {
             showTermsScreen();
@@ -368,6 +370,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.stopDiscovery();
             btChatManager.stop();
         }
+        stopPeriodicUpdateChecks();
         super.onStop();
     }
 
@@ -397,6 +400,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (profileStore != null && profileStore.hasLocalProfile()) {
             tryStartBluetooth();
         }
+        startPeriodicUpdateChecks(false);
         if (gadgetStore != null && gadgetStore.hasPendingTable100Payment()) {
             syncCartelaEntitlement(false);
         }
@@ -5385,6 +5389,29 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setPositiveButton("Baixar APK", (dialog, which) -> openExternalLink(Uri.parse(updateApkUrl)))
                 .setNegativeButton("Agora nao", null)
                 .show();
+    }
+
+    private void startPeriodicUpdateChecks(boolean checkNow) {
+        stopPeriodicUpdateChecks();
+        updateCheckRunnable = new Runnable() {
+            @Override
+            public void run() {
+                checkForUpdates(false);
+                uiHandler.postDelayed(this, UPDATE_CHECK_INTERVAL_MS);
+            }
+        };
+        if (checkNow) {
+            updateCheckRunnable.run();
+        } else {
+            uiHandler.postDelayed(updateCheckRunnable, UPDATE_CHECK_INTERVAL_MS);
+        }
+    }
+
+    private void stopPeriodicUpdateChecks() {
+        if (updateCheckRunnable != null) {
+            uiHandler.removeCallbacks(updateCheckRunnable);
+            updateCheckRunnable = null;
+        }
     }
 
     private void checkForUpdates(boolean showIfCurrent) {
