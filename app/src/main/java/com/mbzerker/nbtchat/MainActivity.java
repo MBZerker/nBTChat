@@ -83,6 +83,7 @@ import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 import com.google.zxing.qrcode.QRCodeWriter;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -94,6 +95,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -197,6 +199,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String pendingSharedKind = "";
     private String pendingSharedBody = "";
     private String pendingSharedMediaBase64 = "";
+    private Uri pendingDeepLinkUri;
     private QrInvite.Invite pendingQrInvite;
     private long pendingQrStartedAt;
     private String pendingOpenChatAddress = "";
@@ -280,6 +283,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         } else if (!settingsStore.termsAccepted(TERMS_VERSION) && profileStore.hasLocalProfile()) {
             settingsStore.setTermsAcceptedVersion(TERMS_VERSION);
+            showInitialScreen();
         } else if (profileStore.hasLocalProfile()) {
             showInitialScreen();
         } else {
@@ -288,6 +292,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!requestMissingPermissions()) {
             tryStartBluetooth();
         }
+        handleDeepLinkIntent(getIntent());
         openChatFromIntent(getIntent());
         handleSharedImageIntent(getIntent());
     }
@@ -383,6 +388,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         super.onNewIntent(intent);
         setIntent(intent);
         openChatFromIntent(intent);
+        handleDeepLinkIntent(intent);
         handleSharedImageIntent(intent);
     }
 
@@ -595,6 +601,72 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         preparePendingSharedMedia(uri);
         intent.setAction("");
+    }
+
+    private boolean handleDeepLinkIntent(Intent intent) {
+        if (intent == null || intent.getData() == null) {
+            return false;
+        }
+        Uri uri = intent.getData();
+        boolean nbtchatShare = "nbtchat".equalsIgnoreCase(uri.getScheme()) && "share".equalsIgnoreCase(uri.getHost());
+        boolean webShare = "https".equalsIgnoreCase(uri.getScheme())
+                && "mbzerker.github.io".equalsIgnoreCase(uri.getHost())
+                && uri.getPath() != null
+                && uri.getPath().startsWith("/nBTChat/l");
+        if (!nbtchatShare && !webShare) {
+            return false;
+        }
+        intent.setData(null);
+        if (!profileStore.hasLocalProfile()) {
+            pendingDeepLinkUri = uri;
+            showProfileScreen();
+            return true;
+        }
+        return handleStoreShareDeepLink(uri);
+    }
+
+    private boolean handleStoreShareDeepLink(Uri uri) {
+        try {
+            JSONObject payload = decodeStoreSharePayload(uri.getQueryParameter("p"));
+            if (payload == null) {
+                Toast.makeText(this, "Link nBTChat invalido.", Toast.LENGTH_LONG).show();
+                return true;
+            }
+            ContactCardPayload contact = ContactCardPayload.parse(payload.optString("contact", ""));
+            if (contact == null || contact.address.trim().isEmpty()) {
+                Toast.makeText(this, "Este link nao tem dados de contato validos.", Toast.LENGTH_LONG).show();
+                return true;
+            }
+            saveSharedContact(contact);
+            String kind = payload.optString("kind", "");
+            String body = payload.optString("body", "");
+            if (!kind.trim().isEmpty() && !body.trim().isEmpty()) {
+                String id = "link-" + Integer.toHexString((contact.address + kind + body).hashCode());
+                messageStore.addMessage(contact.address, id, kind, body, "", 0L,
+                        false, System.currentTimeMillis(), MessageStore.STATUS_DELIVERED, false);
+                if (MessageStore.KIND_TABLE_100.equals(kind)) {
+                    syncCartelaOnline(GadgetStore.Table100Payload.parse(body), false);
+                }
+            }
+            UserProfile profile = profileStore.loadContact(contact.address);
+            currentRemoteAddress = contact.address;
+            currentRemoteProfile = profile.isComplete() ? profile : new UserProfile(safeName(contact.name, "Contato nBTChat"), "", UserProfile.GENDER_OTHER, "");
+            currentFingerprint = profileStore.loadFingerprint(contact.address);
+            showChatScreen(currentRemoteProfile, currentFingerprint);
+            Toast.makeText(this, "Contato e item adicionados ao chat.", Toast.LENGTH_LONG).show();
+            return true;
+        } catch (Exception ex) {
+            Toast.makeText(this, "Nao foi possivel abrir este link nBTChat.", Toast.LENGTH_LONG).show();
+            return true;
+        }
+    }
+
+    private JSONObject decodeStoreSharePayload(String encoded) throws JSONException {
+        if (encoded == null || encoded.trim().isEmpty()) {
+            return null;
+        }
+        byte[] raw = Base64.decode(encoded, Base64.URL_SAFE | Base64.NO_WRAP);
+        return new JSONObject(new String(raw, StandardCharsets.UTF_8));
     }
 
     @SuppressLint("MissingPermission")
@@ -1564,7 +1636,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.sendProfileUpdate();
             notifyProfileUpdated();
             hideKeyboard(nameInput);
-            showInitialScreen();
+            if (pendingDeepLinkUri != null && handleStoreShareDeepLink(pendingDeepLinkUri)) {
+                pendingDeepLinkUri = null;
+            } else {
+                showInitialScreen();
+            }
             tryStartBluetooth();
         });
         root.addView(saveButton, topMargin(dp(26)));
@@ -2398,6 +2474,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         actions.add("Abrir");
         actions.add("Configurar");
         actions.add("Compartilhar");
+        actions.add("Compartilhar link");
         new AlertDialog.Builder(this)
                 .setTitle(GadgetStore.TABLE_100_TITLE)
                 .setItems(actions.toArray(new String[0]), (dialog, which) -> {
@@ -2408,9 +2485,48 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         showTable100ConfigScreen();
                     } else if ("Compartilhar".equals(action)) {
                         showTable100ShareChooser();
+                    } else if ("Compartilhar link".equals(action)) {
+                        shareTable100ExternalLink();
                     }
                 })
                 .show();
+    }
+
+    private void shareTable100ExternalLink() {
+        if (!gadgetStore.hasTable100()) {
+            Toast.makeText(this, "Compre o item antes de compartilhar.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        GadgetStore.Table100Payload payload = table100PayloadWithKnownLocks(gadgetStore.table100Payload());
+        ContactCardPayload contact = localContactCardPayload();
+        if (contact == null) {
+            Toast.makeText(this, "Configure seu perfil antes de compartilhar.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        String url = buildStoreShareUrl(MessageStore.KIND_TABLE_100, payload.toMessageBody(), contact);
+        if (url.isEmpty()) {
+            Toast.makeText(this, "Nao foi possivel criar o link.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_SEND);
+        intent.setType("text/plain");
+        intent.putExtra(Intent.EXTRA_SUBJECT, GadgetStore.TABLE_100_TITLE);
+        intent.putExtra(Intent.EXTRA_TEXT, "Abra este item no nBTChat: " + url);
+        startActivity(Intent.createChooser(intent, "Compartilhar item"));
+    }
+
+    private String buildStoreShareUrl(String kind, String body, ContactCardPayload contact) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("v", 1);
+            payload.put("kind", kind == null ? "" : kind);
+            payload.put("body", body == null ? "" : body);
+            payload.put("contact", contact.toJson());
+            String encoded = Base64.encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8), Base64.URL_SAFE | Base64.NO_WRAP);
+            return DOWNLOAD_PAGE_URL + "l/?p=" + Uri.encode(encoded);
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private void showTable100ShareChooser() {
@@ -4659,6 +4775,24 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return null;
         }
         return new ContactCardPayload(sourceAddress, bluetoothName, identity.deviceId, identity.identityPublicKey, profile, name, true);
+    }
+
+    private ContactCardPayload localContactCardPayload() {
+        UserProfile profile = profileStore.loadLocalProfile();
+        if (!profile.isComplete()) {
+            return null;
+        }
+        String address = btChatManager == null ? "" : btChatManager.localBluetoothAddress();
+        String bluetoothName = btChatManager == null ? "" : btChatManager.localBluetoothName();
+        String deviceId = identityStore.getDeviceId();
+        if (address.trim().isEmpty() && !deviceId.trim().isEmpty()) {
+            address = "nbt-" + deviceId;
+        }
+        String name = safeName(profile.getDisplayName(), "Contato nBTChat");
+        if (bluetoothName.trim().isEmpty()) {
+            bluetoothName = name;
+        }
+        return new ContactCardPayload(address, bluetoothName, deviceId, identityStore.getPublicKeyBase64(), profile, name, settingsStore.contactSharingEnabled());
     }
 
     private void sendContactCardToAddress(String address, ContactCardPayload payload) {

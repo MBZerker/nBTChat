@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Abrir no nBTChat</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f7f5; color: #17212b; }
+    main { width: min(92vw, 430px); background: #fff; border: 1px solid #d7ddd8; border-radius: 18px; padding: 24px; box-shadow: 0 16px 50px #0002; }
+    .badge { width: 68px; height: 68px; border-radius: 20px; display: grid; place-items: center; background: #ddf7e8; color: #16a34a; font-size: 32px; margin-bottom: 14px; font-weight: 900; }
+    h1 { margin: 0; font-size: 28px; }
+    p { color: #52606d; line-height: 1.45; }
+    a { display: block; text-align: center; text-decoration: none; border-radius: 14px; padding: 14px; margin-top: 12px; font-weight: 900; }
+    .primary { background: #16a34a; color: white; }
+    .secondary { background: #edf2f0; color: #17212b; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="badge">nB</div>
+    <h1>Abrir item no nBTChat</h1>
+    <p>Se o app estiver instalado, abra o item e o contato compartilhado no nBTChat. Se ainda nao tiver, baixe o APK e volte por este link.</p>
+    <a id="openApp" class="primary" href="#">Abrir no nBTChat</a>
+    <a class="secondary" href="../nBTChat.apk">Baixar nBTChat</a>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const payload = params.get("p") || "";
+    const appUrl = "nbtchat://share?p=" + encodeURIComponent(payload);
+    document.getElementById("openApp").href = appUrl;
+    setTimeout(() => {
+      location.href = appUrl;
+    }, 350);
+  </script>
+</body>
+</html>
