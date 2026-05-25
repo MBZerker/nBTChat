@@ -2732,13 +2732,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (deviceId.isEmpty()) {
             deviceId = StoreDeviceId.get(this);
         }
+        long pendingStartedAt = gadgetStore.pendingTable100StartedAt();
         String finalDeviceId = deviceId;
         new Thread(() -> {
             try {
                 StorePaymentClient.Entitlement entitlement = storePaymentClient.getCartelaEntitlement(finalDeviceId);
                 runOnUiThread(() -> {
                     cartelaSyncInProgress = false;
-                    if (entitlement.active && entitlement.expiresAt > System.currentTimeMillis()) {
+                    boolean belongsToThisAttempt = pendingStartedAt <= 0L || entitlement.updatedAt >= pendingStartedAt;
+                    if (entitlement.active && entitlement.expiresAt > System.currentTimeMillis() && belongsToThisAttempt) {
                         gadgetStore.activateTable100Until(entitlement.expiresAt);
                         gadgetStore.clearPendingTable100Payment();
                         registerCartelaOnline(false);

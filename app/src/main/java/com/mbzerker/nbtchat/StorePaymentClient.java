@@ -65,7 +65,9 @@ public final class StorePaymentClient {
                 json.optBoolean("active", false),
                 json.optString("productId", PRODUCT_CARTELA_EVENTOS),
                 json.optLong("expiresAt", 0L),
-                json.optString("title", GadgetStore.TABLE_100_TITLE)
+                json.optString("title", GadgetStore.TABLE_100_TITLE),
+                json.optLong("updatedAt", 0L),
+                json.optString("approvedAt", "")
         );
     }
 
@@ -247,12 +249,16 @@ public final class StorePaymentClient {
         public final String productId;
         public final long expiresAt;
         public final String title;
+        public final long updatedAt;
+        public final String approvedAt;
 
-        Entitlement(boolean active, String productId, long expiresAt, String title) {
+        Entitlement(boolean active, String productId, long expiresAt, String title, long updatedAt, String approvedAt) {
             this.active = active;
             this.productId = productId == null ? PRODUCT_CARTELA_EVENTOS : productId;
             this.expiresAt = expiresAt;
             this.title = title == null ? "" : title;
+            this.updatedAt = updatedAt;
+            this.approvedAt = approvedAt == null ? "" : approvedAt;
         }
     }
 

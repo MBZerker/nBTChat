@@ -92,6 +92,10 @@ public final class GadgetStore {
         return deviceId == null ? "" : deviceId.trim();
     }
 
+    public long pendingTable100StartedAt() {
+        return prefs.getLong(KEY_TABLE_100_PENDING_AT, 0L);
+    }
+
     public void clearPendingTable100Payment() {
         prefs.edit()
                 .putString(KEY_TABLE_100_PENDING_URL, "")

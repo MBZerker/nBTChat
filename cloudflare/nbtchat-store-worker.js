@@ -672,6 +672,7 @@ async function writeEntitlement(env, deviceId, product, record) {
     cpfLast4: record.cpfLast4 || "",
     recoveryCodeHash: record.recoveryCodeHash || "",
     recoveryCodeHint: record.recoveryCodeHint || "",
+    approvedAt: record.approvedAt || "",
     updatedAt: Date.now(),
   }));
 }
@@ -723,6 +724,8 @@ async function entitlement(env, url) {
     productId,
     title: record.title || (await getProduct(env, productId))?.title || productId,
     expiresAt: record.expiresAt,
+    approvedAt: record.approvedAt || "",
+    updatedAt: record.updatedAt || 0,
   });
 }
 
