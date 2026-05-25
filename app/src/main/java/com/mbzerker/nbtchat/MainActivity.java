@@ -125,6 +125,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_PICK_NOTIFICATION_SOUND = 108;
     private static final int REQUEST_PICK_NOTIFICATION_SOUND_FILE = 109;
     private static final int REQUEST_RESTORE_BACKUP = 110;
+    private static final int REQUEST_PROFILE_CAMERA = 111;
+    private static final int REQUEST_VOICE_RECORD = 112;
+    private static final int REQUEST_CHAT_CAMERA_PERMISSION = 113;
     private static final int TERMS_VERSION = 1;
     private static final int MAX_GIF_BYTES = 640 * 1024;
     private static final int PROFILE_IMAGE_MAX_SIDE = 256;
@@ -289,9 +292,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else {
             showProfileScreen();
         }
-        if (!requestMissingPermissions()) {
-            tryStartBluetooth();
-        }
+        tryStartBluetooth();
         handleDeepLinkIntent(getIntent());
         openChatFromIntent(getIntent());
         handleSharedImageIntent(getIntent());
@@ -327,9 +328,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             } else {
                 showProfileScreen();
             }
-            if (!requestMissingPermissions()) {
-                tryStartBluetooth();
-            }
+            tryStartBluetooth();
         });
         root.addView(accept, topMargin(dp(16)));
 
@@ -350,7 +349,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "O nBTChat é um aplicativo livre de comunicação local por Bluetooth. Ele foi criado para conversas privadas entre pessoas próximas e para recursos oficiais usados dentro do próprio app.\n\n"
                 + "O app respeita as leis brasileiras. Você se compromete a não usar o nBTChat para fraude, abuso, assédio, jogos de azar, sorteios, distribuição de prêmios, promoções comerciais ou qualquer atividade que exija autorização legal sem cumprir essa exigência.\n\n"
                 + "As conversas não são salvas em servidor do nBTChat. Elas ficam no aparelho. O envio, o histórico local, as mídias, o perfil, os contatos, backups e configurações usam proteções técnicas adequadas ao funcionamento do app.\n\n"
-                + "A loja pode armazenar dados mínimos para liberar compras e recuperação, como identificador do aparelho, produto, validade, nome, CPF protegido, últimos dígitos do CPF, código de recuperação e estado dos itens oficiais. Pagamentos são processados pelo Mercado Pago.\n\n"
+                + "A loja pode armazenar dados mínimos para liberar compras e recuperação, como identificador do aparelho, produto, validade, nome, CPF protegido, últimos dígitos do CPF, código de recuperação e estado dos itens oficiais. Pagamentos são processados por meio da instituição de pagamento configurada no momento da compra.\n\n"
                 + "Os itens oficiais da loja são ferramentas de organização e interação. O organizador é responsável pela finalidade do uso, pelos textos configurados, pelos contatos exibidos e pela conformidade com as regras aplicáveis.\n\n"
                 + "Ao continuar, você entende que o Bluetooth depende do aparelho, permissão do sistema e distância física, e que backups, restaurações e sincronização pela internet podem depender de serviços externos.";
     }
@@ -423,6 +422,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_PERMISSIONS) {
             tryStartBluetooth();
+            if ("scanner".equals(currentScreen) && btChatManager != null && btChatManager.isBluetoothEnabled()) {
+                requestDiscoverableForScanner();
+                btChatManager.startNearbyDiscovery();
+            }
+        } else if (requestCode == REQUEST_PROFILE_CAMERA
+                && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            capturePhoto();
+        } else if (requestCode == REQUEST_CHAT_CAMERA_PERMISSION
+                && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            captureChatImage();
+        } else if (requestCode == REQUEST_VOICE_RECORD
+                && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startVoiceRecording();
         } else if (requestCode == REQUEST_QR_CAMERA
                 && grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -517,10 +532,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else {
             addIfMissing(missing, Manifest.permission.ACCESS_FINE_LOCATION);
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            addIfMissing(missing, Manifest.permission.POST_NOTIFICATIONS);
-        }
-        addIfMissing(missing, Manifest.permission.RECORD_AUDIO);
         if (!missing.isEmpty()) {
             requestPermissions(missing.toArray(new String[0]), REQUEST_PERMISSIONS);
             return true;
@@ -796,10 +807,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         setContentView(root);
         requestInsets(root);
 
-        if (!scanSuggestionShown && settingsStore.shouldPromptNearbyScan(contactCount)) {
-            scanSuggestionShown = true;
-            root.postDelayed(() -> suggestNearbyScan(contactCount), 250);
-        }
     }
 
     private void leaveChatToHome() {
@@ -1061,6 +1068,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         Button scanButton = pillButton("Escanear aparelhos proximos", accent(), darkMode ? "#12171D" : "#17212B");
         scanButton.setOnClickListener(v -> {
+            if (requestMissingPermissions()) {
+                return;
+            }
             requestDiscoverableForScanner();
             discoveredDevices.clear();
             renderNearbyDeviceList();
@@ -1085,12 +1095,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         setContentView(root);
         requestInsets(root);
-        root.postDelayed(this::requestDiscoverableForScanner, 250);
+        root.postDelayed(() -> {
+            if (!requestMissingPermissions()) {
+                requestDiscoverableForScanner();
+            }
+        }, 250);
 
         if (autoStart) {
             discoveredDevices.clear();
             renderNearbyDeviceList();
-            root.postDelayed(() -> btChatManager.startNearbyDiscovery(), 200);
+            root.postDelayed(() -> {
+                if (!requestMissingPermissions()) {
+                    btChatManager.startNearbyDiscovery();
+                }
+            }, 200);
         } else {
             renderNearbyDeviceList();
         }
@@ -2695,6 +2713,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         footer.setLineSpacing(dp(2), 1f);
         root.addView(footer, topMargin(dp(10)));
 
+        if (!owner && !payload.ownerMessage.trim().isEmpty()) {
+            TextView ownerMessage = text(payload.ownerMessage.trim(), 15, primary(), Typeface.BOLD);
+            ownerMessage.setLineSpacing(dp(2), 1f);
+            ownerMessage.setPadding(dp(14), dp(12), dp(14), dp(12));
+            ownerMessage.setBackground(rounded(surface(), dp(14), border()));
+            root.addView(ownerMessage, topMargin(dp(14)));
+        }
+
         if (owner) {
             root.addView(table100OwnerChoices(payload), topMargin(dp(18)));
         } else if (table100HasLocalChoice(payload)) {
@@ -2848,6 +2874,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void captureChatImage() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CHAT_CAMERA_PERMISSION);
+            return;
+        }
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
         intent.putExtra("android.intent.extras.CAMERA_FACING", 1);
         intent.putExtra("android.intent.extra.USE_FRONT_CAMERA", true);
@@ -2869,7 +2899,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return false;
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestMissingPermissions();
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_VOICE_RECORD);
             return false;
         }
         try {
@@ -3584,7 +3614,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         if (owner) {
-            showTable100ResultDialog(number, payload);
+            Toast.makeText(this, "Use a lista de participantes para confirmar ou remover escolhas.", Toast.LENGTH_LONG).show();
             return;
         }
         int status = table100NumberStatus(payload, number, false);
@@ -3600,9 +3630,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setMessage(disclaimer);
         if (payload.allowReservations) {
             builder.setPositiveButton("Confirmar agora", (dialog, which) -> {
-                markTable100Choice(payload, number, false);
-                refreshTable100PlayScreen();
-                showTable100ResultDialog(number, payload);
+                showTable100ResultDialog(number, payload, false);
             });
             builder.setNeutralButton("Reservar", (dialog, which) -> {
                 markTable100Choice(payload, number, true);
@@ -3612,23 +3640,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             builder.setNegativeButton("Cancelar", null);
         } else {
             builder.setPositiveButton("Sim", (dialog, which) -> {
-                markTable100Choice(payload, number, false);
-                refreshTable100PlayScreen();
-                showTable100ResultDialog(number, payload);
+                showTable100ResultDialog(number, payload, false);
             });
             builder.setNegativeButton("Nao", null);
         }
         builder.show();
     }
 
-    private void showTable100ResultDialog(int number, GadgetStore.Table100Payload payload) {
+    private void showTable100ResultDialog(int number, GadgetStore.Table100Payload payload, boolean reserved) {
         String message = payload.ownerMessage.trim().isEmpty()
                 ? "Escolha registrada."
                 : payload.ownerMessage.trim();
         String copyText = payload.copyText.trim().isEmpty()
                 ? "Nenhum texto configurado para esta tabela."
                 : payload.copyText.trim();
-        copyToClipboard(copyText, false);
 
         LinearLayout content = vertical();
         content.setPadding(dp(18), dp(14), dp(18), dp(4));
@@ -3644,8 +3669,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         new AlertDialog.Builder(this)
                 .setTitle("Numero " + number)
                 .setView(content)
-                .setPositiveButton("Copiar", (dialog, which) -> copyMessageText(copyText))
-                .setNegativeButton("Fechar", null)
+                .setPositiveButton("OK", (dialog, which) -> {
+                    copyToClipboard(copyText, false);
+                    markTable100Choice(payload, number, reserved);
+                    refreshTable100PlayScreen();
+                    Toast.makeText(this, "Texto copiado e escolha enviada para análise.", Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("Cancelar", null)
                 .show();
     }
 
@@ -5103,6 +5133,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void capturePhoto() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_PROFILE_CAMERA);
+            return;
+        }
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
         intent.putExtra("android.intent.extras.CAMERA_FACING", 1);
         intent.putExtra("android.intent.extra.USE_FRONT_CAMERA", true);
