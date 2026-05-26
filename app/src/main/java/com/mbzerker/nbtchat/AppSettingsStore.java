@@ -15,6 +15,7 @@ public final class AppSettingsStore {
     private static final String KEY_USER_PRESENCE = "user_presence";
     private static final String KEY_CONTACT_SHARING_ENABLED = "contact_sharing_enabled";
     private static final String KEY_READ_RECEIPTS_ENABLED = "read_receipts_enabled";
+    private static final String KEY_BACKGROUND_AVAILABLE = "background_available";
     private static final String KEY_TERMS_VERSION = "terms_version";
     public static final String VOICE_OUTPUT_PHONE = "phone";
     public static final String VOICE_OUTPUT_BLUETOOTH = "bluetooth";
@@ -98,6 +99,14 @@ public final class AppSettingsStore {
 
     public void setReadReceiptsEnabled(boolean enabled) {
         prefs.edit().putBoolean(KEY_READ_RECEIPTS_ENABLED, enabled).apply();
+    }
+
+    public boolean backgroundAvailable() {
+        return prefs.getBoolean(KEY_BACKGROUND_AVAILABLE, false);
+    }
+
+    public void setBackgroundAvailable(boolean enabled) {
+        prefs.edit().putBoolean(KEY_BACKGROUND_AVAILABLE, enabled).apply();
     }
 
     public int termsVersion() {

@@ -1196,6 +1196,7 @@ public final class BtChatManager {
             int ttl = envelope.optInt("ttl", 0);
             if (ttl > 0) {
                 envelope.put("ttl", ttl - 1);
+                relayStore.log("TTL decrementado pacote " + id + " " + ttl + "->" + (ttl - 1));
                 relayStore.store(envelope);
             }
         }
@@ -1235,6 +1236,7 @@ public final class BtChatManager {
                 new Thread(() -> {
                     try {
                         writeFrame(cryptoSession.encrypt(envelope).toString());
+                        relayStore.log("Pacote selado entregue via relay para " + remoteDeviceId + " ttl=" + envelope.optInt("ttl", 0));
                     } catch (Exception ignored) {
                         relayStore.store(envelope);
                     }

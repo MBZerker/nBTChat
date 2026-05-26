@@ -6,10 +6,12 @@ import android.os.IBinder;
 
 import org.json.JSONObject;
 
-public final class BluetoothForegroundService extends Service implements BtChatManager.Listener {
+public final class BluetoothForegroundService extends Service implements BtChatManager.Listener, BlePresenceManager.Listener {
     public static final String ACTION_PROFILE_UPDATED = "com.mbzerker.nbtchat.PROFILE_UPDATED";
 
     private BtChatManager btChatManager;
+    private BlePresenceManager blePresenceManager;
+    private IdentityStore identityStore;
     private ProfileStore profileStore;
     private MessageStore messageStore;
     private GadgetStore gadgetStore;
@@ -24,10 +26,13 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         messageStore = new MessageStore(this);
         gadgetStore = new GadgetStore(this);
         settingsStore = new AppSettingsStore(this);
+        identityStore = new IdentityStore(this);
         btChatManager = new BtChatManager(this, this);
+        blePresenceManager = new BlePresenceManager(this, identityStore, profileStore, this);
         NotificationHelper.ensureChannels(this);
         startForeground(NotificationHelper.ONLINE_NOTIFICATION_ID, NotificationHelper.buildBackgroundNotification(this));
         btChatManager.startListening();
+        blePresenceManager.startEconomy();
     }
 
     @Override
@@ -38,6 +43,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
                 btChatManager.sendProfileUpdate();
             }
         }
+        if (blePresenceManager != null) {
+            blePresenceManager.startEconomy();
+        }
         return START_STICKY;
     }
 
@@ -45,6 +53,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
     public void onDestroy() {
         if (btChatManager != null) {
             btChatManager.stop();
+        }
+        if (blePresenceManager != null) {
+            blePresenceManager.stop();
         }
         super.onDestroy();
     }
@@ -64,6 +75,10 @@ public final class BluetoothForegroundService extends Service implements BtChatM
 
     @Override
     public void onDiscoveryFinished() {
+    }
+
+    @Override
+    public void onBlePeerSeen(String address, String bleIdHex, int rssi, long timestamp) {
     }
 
     @Override

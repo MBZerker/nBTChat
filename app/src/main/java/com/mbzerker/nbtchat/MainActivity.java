@@ -40,6 +40,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.animation.ValueAnimator;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
@@ -302,9 +303,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         blePresenceManager = new BlePresenceManager(this, identityStore, profileStore, this);
         NotificationHelper.ensureChannels(this);
         NotificationHelper.cancelBackgroundNotification(this);
-        try {
-            stopService(new Intent(this, BluetoothForegroundService.class));
-        } catch (Exception ignored) {
+        if (!settingsStore.backgroundAvailable()) {
+            try {
+                stopService(new Intent(this, BluetoothForegroundService.class));
+            } catch (Exception ignored) {
+            }
         }
         registerMessageReceiver();
         applySystemBars();
@@ -398,7 +401,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.stopDiscovery();
             btChatManager.stop();
         }
-        stopBlePresence();
+        if (!settingsStore.backgroundAvailable()) {
+            stopBlePresence();
+        }
         stopPeriodicUpdateChecks();
         stopTable100AutoSync();
         super.onStop();
@@ -440,7 +445,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     public void onBackPressed() {
         if ("chat".equals(currentScreen)) {
             leaveChatToHome();
-        } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen) || "share_targets".equals(currentScreen)) {
+        } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen) || "share_targets".equals(currentScreen) || "mesh_diag".equals(currentScreen)) {
             showHomeScreen();
         } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen) || "cartela_purchase".equals(currentScreen)) {
             showStoreScreen();
@@ -608,7 +613,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!profileStore.hasLocalProfile()) {
             return;
         }
-        btChatManager.startListening();
+        if (settingsStore.backgroundAvailable()) {
+            Intent intent = new Intent(this, BluetoothForegroundService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        } else {
+            btChatManager.startListening();
+        }
     }
 
     private void notifyProfileUpdated() {
@@ -5423,49 +5437,61 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showMainMenu(View anchor) {
-        PopupMenu menu = new PopupMenu(this, anchor);
-        int order = 0;
+        LinearLayout menu = vertical();
+        menu.setPadding(dp(8), dp(8), dp(8), dp(8));
+        menu.setBackground(rounded(surface(), dp(12), border()));
+        PopupWindow window = new PopupWindow(menu, dp(248), ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.setOutsideTouchable(true);
         if (updateAvailable) {
-            menu.getMenu().add(0, 10, order++, "Baixar atualizacao" + (updateVersionName.isEmpty() ? "" : " " + updateVersionName));
+            menu.addView(menuRow("Baixar atualizacao" + (updateVersionName.isEmpty() ? "" : " " + updateVersionName), "#16A34A", "#FFFFFF", () -> {
+                window.dismiss();
+                showUpdateDialog();
+            }));
         }
         if ("chat".equals(currentScreen) && currentRemoteAddress != null && !currentRemoteAddress.isEmpty()) {
-            menu.getMenu().add(0, 11, order++, "Apagar conversa");
-        }
-        menu.getMenu().add(0, 12, order++, "Conectar por QR");
-        menu.getMenu().add(0, 2, order++, "Compartilhar app");
-        menu.getMenu().add(0, 4, order++, "Configuracoes");
-        menu.getMenu().add(0, 3, order, darkMode ? "Tema claro" : "Tema escuro");
-        menu.setOnMenuItemClickListener(item -> {
-            if (item.getItemId() == 10) {
-                showUpdateDialog();
-                return true;
-            }
-            if (item.getItemId() == 11) {
+            menu.addView(menuRow("Apagar conversa", surface(), primary(), () -> {
+                window.dismiss();
                 confirmDeleteConversation(currentRemoteAddress);
-                return true;
-            }
-            if (item.getItemId() == 12) {
-                showQrActionsDialog();
-                return true;
-            }
-            if (item.getItemId() == 2) {
-                shareApp();
-                return true;
-            }
-            if (item.getItemId() == 4) {
-                showSettingsScreen();
-                return true;
-            }
-            if (item.getItemId() == 3) {
-                darkMode = !darkMode;
-                themeStore.setDarkMode(darkMode);
-                applySystemBars();
-                refreshCurrentScreen();
-                return true;
-            }
-            return false;
-        });
-        menu.show();
+            }));
+        }
+        menu.addView(menuRow("Conectar por QR", surface(), primary(), () -> {
+            window.dismiss();
+            showQrActionsDialog();
+        }));
+        menu.addView(menuRow("Compartilhar app", surface(), primary(), () -> {
+            window.dismiss();
+            shareApp();
+        }));
+        menu.addView(menuRow("Diagnostico mesh", surface(), primary(), () -> {
+            window.dismiss();
+            showMeshDiagnosticsScreen();
+        }));
+        menu.addView(menuRow("Configuracoes", surface(), primary(), () -> {
+            window.dismiss();
+            showSettingsScreen();
+        }));
+        menu.addView(menuRow(darkMode ? "Tema claro" : "Tema escuro", surface(), primary(), () -> {
+            window.dismiss();
+            darkMode = !darkMode;
+            themeStore.setDarkMode(darkMode);
+            applySystemBars();
+            refreshCurrentScreen();
+        }));
+        window.showAsDropDown(anchor, -dp(206), dp(6));
+    }
+
+    private View menuRow(String label, String backgroundColor, String textColor, Runnable action) {
+        TextView row = text(label, 15, textColor, Typeface.BOLD);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinHeight(dp(46));
+        row.setPadding(dp(14), 0, dp(14), 0);
+        row.setBackground(rounded(backgroundColor, dp(9), backgroundColor));
+        row.setOnClickListener(v -> action.run());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
+        params.setMargins(0, 0, 0, dp(6));
+        row.setLayoutParams(params);
+        return row;
     }
 
     private void shareApp() {
@@ -5475,6 +5501,56 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         intent.putExtra(Intent.EXTRA_SUBJECT, "nBTChat");
         intent.putExtra(Intent.EXTRA_TEXT, "Baixe o nBTChat para conversar por Bluetooth: " + url);
         startActivity(Intent.createChooser(intent, "Compartilhar nBTChat"));
+    }
+
+    private void showMeshDiagnosticsScreen() {
+        currentScreen = "mesh_diag";
+        stopHomePresenceProbe();
+
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(16));
+        scrollView.addView(root, matchWrap());
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showHomeScreen()));
+        TextView title = text("Diagnostico mesh", 26, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        addTopActions(top);
+        root.addView(top);
+
+        RelayStore relayStore = new RelayStore(this);
+        LinearLayout card = vertical();
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setBackground(rounded(surface(), dp(12), border()));
+        card.addView(text("Base relay/store-and-forward", 17, primary(), Typeface.BOLD));
+        card.addView(text("Use esta tela apenas para validar A -> B -> C com aparelhos reais antes de chamar isso de mesh.", 13, secondary(), Typeface.NORMAL), topMargin(dp(6)));
+        card.addView(text("Pacotes selados em fila: " + relayStore.queuedCount(), 15, primary(), Typeface.BOLD), topMargin(dp(14)));
+        card.addView(text("Destinos com fila: " + relayStore.destinationCount(), 15, primary(), Typeface.BOLD), topMargin(dp(6)));
+        root.addView(card, topMargin(dp(16)));
+
+        LinearLayout logCard = vertical();
+        logCard.setPadding(dp(14), dp(14), dp(14), dp(14));
+        logCard.setBackground(rounded(surface(), dp(12), border()));
+        logCard.addView(text("Log", 17, primary(), Typeface.BOLD));
+        List<String> events = relayStore.diagnostics();
+        if (events.isEmpty()) {
+            logCard.addView(text("Sem eventos ainda. Envie um item selado por ponte para registrar pacote guardado, ttl decrementado e entrega.", 13, secondary(), Typeface.NORMAL), topMargin(dp(8)));
+        } else {
+            for (String event : events) {
+                TextView row = text(event, 12, secondary(), Typeface.NORMAL);
+                row.setLineSpacing(dp(2), 1f);
+                logCard.addView(row, topMargin(dp(6)));
+            }
+        }
+        root.addView(logCard, topMargin(dp(12)));
+
+        setContentView(scrollView);
+        requestInsets(root);
     }
 
     private void shareBackupZip() {
@@ -5655,6 +5731,34 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         readReceiptToggle.setOnCheckedChangeListener((buttonView, isChecked) -> settingsStore.setReadReceiptsEnabled(isChecked));
         readReceiptRow.addView(readReceiptToggle);
         card.addView(readReceiptRow, topMargin(dp(20)));
+
+        LinearLayout backgroundRow = horizontal();
+        backgroundRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout backgroundText = vertical();
+        backgroundText.addView(text("Ficar disponivel em segundo plano", 16, primary(), Typeface.BOLD));
+        TextView backgroundHint = text("Mantem uma notificacao minima e permite receber mensagens com o app fechado.", 13, secondary(), Typeface.NORMAL);
+        backgroundHint.setLineSpacing(dp(2), 1f);
+        backgroundText.addView(backgroundHint, topMargin(dp(3)));
+        backgroundRow.addView(backgroundText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Switch backgroundToggle = new Switch(this);
+        backgroundToggle.setChecked(settingsStore.backgroundAvailable());
+        backgroundToggle.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            settingsStore.setBackgroundAvailable(isChecked);
+            if (isChecked) {
+                startOnlineService();
+                startBlePresenceForCurrentScreen();
+                Toast.makeText(this, "nBTChat ficara disponivel em segundo plano.", Toast.LENGTH_LONG).show();
+            } else {
+                try {
+                    stopService(new Intent(this, BluetoothForegroundService.class));
+                } catch (Exception ignored) {
+                }
+                NotificationHelper.cancelBackgroundNotification(this);
+                Toast.makeText(this, "Disponibilidade em segundo plano desligada.", Toast.LENGTH_SHORT).show();
+            }
+        });
+        backgroundRow.addView(backgroundToggle);
+        card.addView(backgroundRow, topMargin(dp(20)));
 
         TextView backupTitle = text("Backup", 16, primary(), Typeface.BOLD);
         card.addView(backupTitle, topMargin(dp(22)));
@@ -7237,10 +7341,32 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private ImageButton menuButton() {
         ImageButton button = iconButton(updateAvailable ? R.drawable.ic_update_24 : R.drawable.ic_menu_24, "Menu", dp(42), v -> showMainMenu(v));
         if (updateAvailable) {
-            button.setColorFilter(Color.WHITE);
             button.setBackground(rounded("#16A34A", dp(22), "#16A34A"));
+            startUpdateMenuPulse(button);
         }
         return button;
+    }
+
+    private void startUpdateMenuPulse(ImageButton button) {
+        ValueAnimator animator = ValueAnimator.ofArgb(Color.WHITE, color("#16A34A"));
+        animator.setDuration(250);
+        animator.setRepeatMode(ValueAnimator.REVERSE);
+        animator.setRepeatCount(ValueAnimator.INFINITE);
+        animator.addUpdateListener(animation -> button.setColorFilter((int) animation.getAnimatedValue()));
+        button.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override
+            public void onViewAttachedToWindow(View v) {
+                animator.start();
+            }
+
+            @Override
+            public void onViewDetachedFromWindow(View v) {
+                animator.cancel();
+            }
+        });
+        if (button.isAttachedToWindow()) {
+            animator.start();
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")

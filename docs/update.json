@@ -1,9 +1,9 @@
 {
-  "versionCode": 53,
-  "versionName": "0.4.31",
+  "versionCode": 54,
+  "versionName": "0.4.32",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.31.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.32.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Adiciona BLE como radar economico com ID diario rotativo e mantem o chat real no Bluetooth Classic."
+  "changelog": "Adiciona opcao para ficar disponivel em segundo plano, melhora indicador de update e inclui diagnostico mesh."
 }
