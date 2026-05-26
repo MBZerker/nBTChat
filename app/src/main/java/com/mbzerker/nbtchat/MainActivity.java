@@ -153,11 +153,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             "\uD83D\uDE09", "\uD83D\uDE05", "\uD83E\uDD17", "\uD83D\uDE31", "\uD83D\uDC4F", "\uD83E\uDD1D",
             "\uD83D\uDCAA", "\uD83C\uDF7A", "\uD83C\uDFB5", "\uD83D\uDCA1", "\u2705", "\uD83D\uDE80"
     };
-    private static final String COMMAND_ROOT = "nbtchat_cmd";
-    private static final String[] COMMAND_NAMES = {
-            "status_border_redim_speed",
-            "status_border_rotation_speed"
-    };
     private static final String UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/update.json";
     private static final String DOWNLOAD_PAGE_URL = "https://mbzerker.github.io/nBTChat/";
     private static final Pattern LINK_PATTERN = Pattern.compile("(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)");
@@ -257,7 +252,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private long lastTypingSentAt;
     private Runnable typingStopRunnable;
     private boolean chatAvatarSpinning;
-    private boolean completingCommand;
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -896,7 +890,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
             @Override
             public void afterTextChanged(Editable s) {
-                autocompleteCommand(s);
             }
         });
         searchShell.addView(conversationSearchInput, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
@@ -2131,13 +2124,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!hasCurrentConversation()) {
             return;
         }
-        if (body.startsWith("/nbtchat_cmd")) {
-            if (handleAdminCommand(body)) {
-                messageInput.setText("");
-                sendLocalTyping(false);
-            }
-            return;
-        }
         messageInput.setText("");
         sendLocalTyping(false);
         long sentAt = System.currentTimeMillis();
@@ -2148,90 +2134,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         addMessageBubble(id, body, true, MessageStore.KIND_TEXT, "", 0L, MessageStore.STATUS_PENDING, replyToId, replyPreview, sentAt, true);
         sendOrQueueOutgoing(currentRemoteAddress, id, MessageStore.KIND_TEXT, body, "", 0L, sentAt, replyToId, replyPreview);
         clearPendingReply();
-    }
-
-    private void autocompleteCommand(Editable editable) {
-        if (completingCommand || editable == null || messageInput == null || !isLocalAdmProfile()) {
-            return;
-        }
-        String raw = editable.toString();
-        if (!raw.startsWith("/") || raw.contains("\n")) {
-            return;
-        }
-        int selection = messageInput.getSelectionStart();
-        if (selection < 0 || selection != raw.length()) {
-            return;
-        }
-        String suggestion = commandSuggestion(raw);
-        if (suggestion.isEmpty() || suggestion.equals(raw)) {
-            return;
-        }
-        completingCommand = true;
-        messageInput.setText(suggestion);
-        messageInput.setSelection(raw.length(), suggestion.length());
-        completingCommand = false;
-    }
-
-    private String commandSuggestion(String raw) {
-        String body = raw.substring(1);
-        if (body.indexOf(' ') < 0) {
-            return COMMAND_ROOT.startsWith(body) ? "/" + COMMAND_ROOT : "";
-        }
-        String[] parts = body.split(" ", -1);
-        if (parts.length < 2 || !COMMAND_ROOT.equals(parts[0])) {
-            return "";
-        }
-        String commandPrefix = parts[1];
-        for (String command : COMMAND_NAMES) {
-            if (command.startsWith(commandPrefix)) {
-                String rest = body.substring(parts[0].length() + 1 + commandPrefix.length());
-                return "/" + COMMAND_ROOT + " " + command + rest;
-            }
-        }
-        return "";
-    }
-
-    private boolean handleAdminCommand(String body) {
-        if (!isLocalAdmProfile()) {
-            Toast.makeText(this, "Comando ADM bloqueado.", Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        String[] parts = body.trim().split("\\s+");
-        if (parts.length < 3 || !("/" + COMMAND_ROOT).equals(parts[0])) {
-            Toast.makeText(this, "Comando invalido.", Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        float seconds;
-        try {
-            seconds = Float.parseFloat(parts[2].replace(",", "."));
-        } catch (Exception ex) {
-            Toast.makeText(this, "Valor invalido. Use exemplo: 3.0", Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        if ("status_border_redim_speed".equals(parts[1])) {
-            settingsStore.setStatusBorderRedimSpeed(seconds);
-            updateChatHeaderStatus();
-            Toast.makeText(this, "Redimensionamento ajustado.", Toast.LENGTH_SHORT).show();
-            return true;
-        }
-        if ("status_border_rotation_speed".equals(parts[1])) {
-            settingsStore.setStatusBorderRotationSpeed(seconds);
-            restartChatAvatarSpin();
-            Toast.makeText(this, "Rotacao ajustada.", Toast.LENGTH_SHORT).show();
-            return true;
-        }
-        Toast.makeText(this, "Comando desconhecido.", Toast.LENGTH_SHORT).show();
-        return false;
-    }
-
-    private boolean isLocalAdmProfile() {
-        if (profileStore == null) {
-            return false;
-        }
-        UserProfile local = profileStore.loadLocalProfile();
-        return local != null
-                && "ADM".equals(local.getDisplayName().trim())
-                && "ADM".equals(local.getStatus().trim());
     }
 
     private void handleLocalTypingChanged(CharSequence text) {
@@ -4847,23 +4749,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!chatAvatarSpinning || ring == null) {
             return;
         }
-        long duration = Math.max(300L, (long) ((settingsStore == null ? 1.2f : settingsStore.statusBorderRotationSpeed()) * 1000L));
         ring.animate()
                 .rotationBy(360f)
-                .setDuration(duration)
+                .setDuration(1100L)
                 .setInterpolator(new LinearInterpolator())
                 .withEndAction(this::spinChatAvatarFrame)
                 .start();
-    }
-
-    private void restartChatAvatarSpin() {
-        LoadingRingView ring = statusRingView(chatAvatarFrame);
-        if (ring != null) {
-            ring.animate().cancel();
-            ring.setRotation(0f);
-        }
-        chatAvatarSpinning = false;
-        updateChatAvatarSpin();
     }
 
     private LoadingRingView statusRingView(FrameLayout frame) {
@@ -6625,12 +6516,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             basePaint.setColor(adjustAlpha(ringColor, 0.24f));
             canvas.drawOval(bounds, basePaint);
-            long duration = Math.max(300L, (long) ((settingsStore == null ? 1.2f : settingsStore.statusBorderRedimSpeed()) * 1000L));
-            double phase = (System.currentTimeMillis() % duration) / (double) duration;
-            double wave = Math.abs(Math.sin(phase * Math.PI * 2d));
-            float sweep = 52f + (float) (wave * 168f);
-            canvas.drawArc(bounds, -70f, sweep, false, arcPaint);
-            postInvalidateOnAnimation();
+            canvas.drawArc(bounds, -90f, 96f, false, arcPaint);
         }
     }
 

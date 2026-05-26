@@ -15,8 +15,6 @@ public final class AppSettingsStore {
     private static final String KEY_USER_PRESENCE = "user_presence";
     private static final String KEY_CONTACT_SHARING_ENABLED = "contact_sharing_enabled";
     private static final String KEY_TERMS_VERSION = "terms_version";
-    private static final String KEY_STATUS_BORDER_REDIM_SPEED = "status_border_redim_speed";
-    private static final String KEY_STATUS_BORDER_ROTATION_SPEED = "status_border_rotation_speed";
     public static final String VOICE_OUTPUT_PHONE = "phone";
     public static final String VOICE_OUTPUT_BLUETOOTH = "bluetooth";
     public static final String PRESENCE_ONLINE = "online";
@@ -103,37 +101,6 @@ public final class AppSettingsStore {
 
     public void setTermsAcceptedVersion(int version) {
         prefs.edit().putLong(KEY_TERMS_VERSION, Math.max(0, version)).apply();
-    }
-
-    public float statusBorderRedimSpeed() {
-        return floatPref(KEY_STATUS_BORDER_REDIM_SPEED, 1.2f);
-    }
-
-    public float statusBorderRotationSpeed() {
-        return floatPref(KEY_STATUS_BORDER_ROTATION_SPEED, 1.2f);
-    }
-
-    public void setStatusBorderRedimSpeed(float seconds) {
-        prefs.edit().putString(KEY_STATUS_BORDER_REDIM_SPEED, String.valueOf(clampSpeed(seconds))).apply();
-    }
-
-    public void setStatusBorderRotationSpeed(float seconds) {
-        prefs.edit().putString(KEY_STATUS_BORDER_ROTATION_SPEED, String.valueOf(clampSpeed(seconds))).apply();
-    }
-
-    private float floatPref(String key, float fallback) {
-        try {
-            return clampSpeed(Float.parseFloat(prefs.getString(key, String.valueOf(fallback))));
-        } catch (Exception ignored) {
-            return fallback;
-        }
-    }
-
-    private float clampSpeed(float value) {
-        if (Float.isNaN(value) || Float.isInfinite(value)) {
-            return 1.2f;
-        }
-        return Math.max(0.3f, Math.min(12f, value));
     }
 
     public boolean shouldPromptNearbyScan(int contactCount) {
