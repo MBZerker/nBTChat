@@ -2530,7 +2530,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             item.setOnClickListener(v -> showTable100OptionsDialog());
             card.setOnClickListener(v -> showTable100OptionsDialog());
         } else if (gadgetStore.hasPendingTable100Payment()) {
-            TextView pending = text("Pagamento em andamento. Ao concluir, volte ao app e toque em verificar.", 13, secondary(), Typeface.BOLD);
+            boolean recoveryPending = isPendingCartelaRecovery();
+            TextView pending = text(recoveryPending
+                    ? "Recuperacao em andamento. Se nao foi concluida, cancele para comprar normalmente."
+                    : "Pagamento em andamento. Ao concluir, volte ao app e toque em verificar.", 13, secondary(), Typeface.BOLD);
             item.addView(pending, topMargin(dp(14)));
             LinearLayout actions = horizontal();
             actions.setGravity(Gravity.CENTER_VERTICAL);
@@ -2543,6 +2546,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             checkParams.setMargins(dp(8), 0, 0, 0);
             actions.addView(check, checkParams);
             item.addView(actions, topMargin(dp(12)));
+            Button cancel = pillButton(recoveryPending ? "Cancelar recuperacao" : "Cancelar pagamento", surfaceAlt(), primary());
+            cancel.setOnClickListener(v -> clearPendingCartelaPayment(true));
+            item.addView(cancel, topMargin(dp(8)));
         } else {
             LinearLayout priceRow = horizontal();
             priceRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -2775,6 +2781,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         openExternalLink(Uri.parse(url));
     }
 
+    private boolean isPendingCartelaRecovery() {
+        String url = gadgetStore == null ? "" : gadgetStore.pendingTable100CheckoutUrl();
+        return url.contains("/recover");
+    }
+
+    private void clearPendingCartelaPayment(boolean showFeedback) {
+        if (gadgetStore != null) {
+            gadgetStore.clearPendingTable100Payment();
+        }
+        if (showFeedback) {
+            Toast.makeText(this, "Operacao cancelada. Voce pode comprar novamente.", Toast.LENGTH_SHORT).show();
+        }
+        showStoreScreen();
+    }
+
     private void syncCartelaEntitlement(boolean showFeedback) {
         if (cartelaSyncInProgress || storePaymentClient == null || gadgetStore == null) {
             return;
@@ -2800,6 +2821,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         showTable100ConfigScreen();
                     } else if (showFeedback) {
                         Toast.makeText(this, "Pagamento ainda nao confirmado.", Toast.LENGTH_LONG).show();
+                        if (isPendingCartelaRecovery()) {
+                            gadgetStore.clearPendingTable100Payment();
+                        }
                     }
                     if ("store".equals(currentScreen)) {
                         showStoreScreen();
@@ -2813,6 +2837,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     cartelaSyncInProgress = false;
                     if (showFeedback) {
                         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                        if (isPendingCartelaRecovery()) {
+                            gadgetStore.clearPendingTable100Payment();
+                        }
                     }
                     if ("store".equals(currentScreen)) {
                         showStoreScreen();

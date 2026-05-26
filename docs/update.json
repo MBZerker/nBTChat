@@ -1,9 +1,9 @@
 {
-  "versionCode": 45,
-  "versionName": "0.4.23",
+  "versionCode": 46,
+  "versionName": "0.4.24",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.23.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.24.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Remove comandos ADM e troca a borda de conexao por um spinner classico integrado ao avatar."
+  "changelog": "Corrige recuperacao de compra sem sucesso para nao travar a loja; adiciona cancelar operacao pendente."
 }
