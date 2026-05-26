@@ -1029,6 +1029,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         homePresenceProbeAddresses.clear();
     }
 
+    private boolean canMarkIncomingRead() {
+        return settingsStore != null && !AppSettingsStore.PRESENCE_INVISIBLE.equals(settingsStore.userPresence());
+    }
+
+    private boolean canSendReadReceipt(String address) {
+        return canMarkIncomingRead()
+                && settingsStore.readReceiptsEnabled()
+                && !profileStore.isMuted(address);
+    }
+
     private View bottomNavBar() {
         LinearLayout bar = horizontal();
         bar.setGravity(Gravity.CENTER);
@@ -1941,11 +1951,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 1
         ));
 
-        List<String> readIds = messageStore.unreadMessageIds(currentRemoteAddress);
-        messageStore.markRead(currentRemoteAddress);
-        if (!profileStore.isMuted(currentRemoteAddress)) {
-            for (String id : readIds) {
-                btChatManager.sendReceipt(currentRemoteAddress, id, MessageStore.STATUS_READ);
+        if (canMarkIncomingRead()) {
+            List<String> readIds = messageStore.unreadMessageIds(currentRemoteAddress);
+            messageStore.markRead(currentRemoteAddress);
+            if (canSendReadReceipt(currentRemoteAddress)) {
+                for (String id : readIds) {
+                    btChatManager.sendReceipt(currentRemoteAddress, id, MessageStore.STATUS_READ);
+                }
             }
         }
         renderChatHistory(true);
@@ -5072,10 +5084,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         boolean activeChat = "chat".equals(currentScreen) && address.equals(currentRemoteAddress);
-        boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, !activeChat, replyToId, replyPreview);
+        boolean markReadNow = activeChat && canMarkIncomingRead();
+        boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, !markReadNow, replyToId, replyPreview);
         if (activeChat) {
-            messageStore.markRead(address);
-            if (!profileStore.isMuted(address)) {
+            if (markReadNow) {
+                messageStore.markRead(address);
+            }
+            if (canSendReadReceipt(address)) {
                 btChatManager.sendReceipt(address, id, MessageStore.STATUS_READ);
             }
             if (inserted) {
@@ -5239,8 +5254,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
-            messageStore.markRead(address);
-            if (id != null && !id.trim().isEmpty() && !profileStore.isMuted(address)) {
+            if (canMarkIncomingRead()) {
+                messageStore.markRead(address);
+            }
+            if (id != null && !id.trim().isEmpty() && canSendReadReceipt(address)) {
                 btChatManager.sendReceipt(address, id, MessageStore.STATUS_READ);
             }
             MessageStore.ChatMessage message = messageStore.findMessage(address, id);
@@ -5470,6 +5487,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         });
         privacyRow.addView(privacyToggle);
         card.addView(privacyRow, topMargin(dp(20)));
+
+        LinearLayout readReceiptRow = horizontal();
+        readReceiptRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout readReceiptText = vertical();
+        readReceiptText.addView(text("Confirmacao de leitura", 16, primary(), Typeface.BOLD));
+        TextView readReceiptHint = text("Se desligado, seus contatos nao recebem o aviso de que voce leu as mensagens.", 13, secondary(), Typeface.NORMAL);
+        readReceiptHint.setLineSpacing(dp(2), 1f);
+        readReceiptText.addView(readReceiptHint, topMargin(dp(3)));
+        readReceiptRow.addView(readReceiptText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Switch readReceiptToggle = new Switch(this);
+        readReceiptToggle.setChecked(settingsStore.readReceiptsEnabled());
+        readReceiptToggle.setOnCheckedChangeListener((buttonView, isChecked) -> settingsStore.setReadReceiptsEnabled(isChecked));
+        readReceiptRow.addView(readReceiptToggle);
+        card.addView(readReceiptRow, topMargin(dp(20)));
 
         TextView backupTitle = text("Backup", 16, primary(), Typeface.BOLD);
         card.addView(backupTitle, topMargin(dp(22)));

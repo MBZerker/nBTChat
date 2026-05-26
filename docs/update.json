@@ -1,9 +1,9 @@
 {
-  "versionCode": 50,
-  "versionName": "0.4.28",
+  "versionCode": 51,
+  "versionName": "0.4.29",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.28.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.29.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Tenta atualizar a presenca dos contatos pareados ao abrir Conversas e restringe pedidos de pareamento ao scanner."
+  "changelog": "Melhora mensagens de erro Bluetooth e adiciona privacidade para confirmacao de leitura, respeitando status invisivel."
 }

@@ -895,7 +895,8 @@ public final class BtChatManager {
                 }
             } catch (Exception ex) {
                 if (running) {
-                    postError((incoming ? "Erro na conexao recebida: " : "Erro na conexao: ") + ex.getMessage());
+                    String name = safeName(socket.getRemoteDevice());
+                    postError("Nao foi possivel manter a conexao com " + name + ". Abra o nBTChat nos dois aparelhos e tente novamente.");
                 }
             } finally {
                 closeQuietly(socket);
@@ -1074,7 +1075,8 @@ public final class BtChatManager {
             long sentAt = plain.optLong("sentAt", System.currentTimeMillis());
             String replyToId = plain.optString("replyToId", "");
             String replyPreview = plain.optString("replyPreview", "");
-            if (!profileStore.isMuted(conversationAddress)) {
+            if (!profileStore.isMuted(conversationAddress)
+                    && !AppSettingsStore.PRESENCE_INVISIBLE.equals(settingsStore.userPresence())) {
                 sendReceipt(receiptDestinationAddress, id, MessageStore.STATUS_DELIVERED);
             }
             mainHandler.post(() -> listener.onMessageReceived(conversationAddress, id, kind, body, mediaBase64, durationMs, sentAt, replyToId, replyPreview));
