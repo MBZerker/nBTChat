@@ -263,6 +263,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private long lastTypingSentAt;
     private Runnable typingStopRunnable;
     private boolean chatAvatarSpinning;
+    private StorePaymentClient.ProductConfig latestCartelaProduct;
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -2700,15 +2701,51 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         TextView subtitle = text("Gadgets oficiais para usar dentro do nBTChat.", 14, secondary(), Typeface.NORMAL);
         root.addView(subtitle, topMargin(dp(8)));
 
-        root.addView(table100StoreItem(), topMargin(dp(18)));
+        StorePaymentClient.ProductConfig product = latestCartelaProduct == null
+                ? StorePaymentClient.ProductConfig.fromJson(null)
+                : latestCartelaProduct;
+        root.addView(table100StoreItem(product), topMargin(dp(18)));
 
         attachTopLevelSwipe(root);
         attachTopLevelSwipe(scrollView);
         setContentView(scrollView);
         requestInsets(root);
+        refreshStoreProductsInBackground();
     }
 
-    private View table100StoreItem() {
+    private void refreshStoreProductsInBackground() {
+        new Thread(() -> {
+            try {
+                StorePaymentClient.ProductConfig product = storePaymentClient.getCartelaProduct();
+                runOnUiThread(() -> {
+                    boolean changed = !sameProductConfig(latestCartelaProduct, product);
+                    latestCartelaProduct = product;
+                    if (changed && "store".equals(currentScreen)) {
+                        showStoreScreen();
+                    }
+                });
+            } catch (Exception ignored) {
+            }
+        }, "nBTChat-store-products").start();
+    }
+
+    private boolean sameProductConfig(StorePaymentClient.ProductConfig a, StorePaymentClient.ProductConfig b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.id.equals(b.id)
+                && a.title.equals(b.title)
+                && Math.abs(a.price - b.price) < 0.001
+                && Math.abs(a.dailyFee - b.dailyFee) < 0.001
+                && Math.abs(a.power - b.power) < 0.001
+                && a.durationDays == b.durationDays
+                && a.footer.equals(b.footer);
+    }
+
+    private View table100StoreItem(StorePaymentClient.ProductConfig product) {
         FrameLayout card = new FrameLayout(this);
         card.setMinimumHeight(dp(230));
         card.setBackground(rounded(surface(), dp(12), border()));
@@ -2743,7 +2780,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         header.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
         LinearLayout texts = vertical();
-        TextView name = text(GadgetStore.TABLE_100_TITLE, 19, primary(), Typeface.BOLD);
+        TextView name = text(product.title, 19, primary(), Typeface.BOLD);
         texts.addView(name);
         TextView description = text("100 numeros interativos para enviar em uma conversa.", 13, secondary(), Typeface.NORMAL);
         description.setLineSpacing(dp(2), 1f);
@@ -2803,14 +2840,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else {
             LinearLayout priceRow = horizontal();
             priceRow.setGravity(Gravity.CENTER_VERTICAL);
-            TextView price = text("R$ 2,49", 19, "#16A34A", Typeface.BOLD);
+            TextView price = text(money(product.price), 19, "#16A34A", Typeface.BOLD);
             priceRow.addView(price);
-            TextView days = text("1 dia", 14, "#38BDF8", Typeface.BOLD);
+            TextView days = text(product.durationDays + " dia" + (product.durationDays == 1 ? "" : "s"), 14, "#38BDF8", Typeface.BOLD);
             LinearLayout.LayoutParams daysParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             daysParams.setMargins(dp(8), 0, 0, 0);
             priceRow.addView(days, daysParams);
             item.addView(priceRow, topMargin(dp(14)));
-            TextView footer = text(GadgetStore.TABLE_100_FOOTER, 12, secondary(), Typeface.NORMAL);
+            TextView footer = text(product.footer, 12, secondary(), Typeface.NORMAL);
             footer.setLineSpacing(dp(2), 1f);
             item.addView(footer, topMargin(dp(8)));
             Button buy = pillButton("Comprar", "#16A34A", "#FFFFFF");

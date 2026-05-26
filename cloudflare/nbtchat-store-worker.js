@@ -1,4 +1,4 @@
-const PRODUCTS = {
+﻿const PRODUCTS = {
   cartela_de_eventos: {
     id: "cartela_de_eventos",
     title: "Cartela de eventos",
@@ -27,6 +27,13 @@ async function getProducts(env) {
     for (const [id, product] of Object.entries(defaults)) {
       const custom = saved && saved[id] ? saved[id] : {};
       defaults[id] = normalizeProduct({ ...product, ...custom }, product);
+    }
+    if (saved && typeof saved === "object") {
+      for (const [id, product] of Object.entries(saved)) {
+        if (!defaults[id] && product && typeof product === "object") {
+          defaults[id] = normalizeProduct({ ...product, id }, PRODUCTS.cartela_de_eventos);
+        }
+      }
     }
   } catch (_) {
   }
@@ -289,7 +296,6 @@ async function adminLogin(request, env) {
 async function adminPage(request, env) {
   const authenticated = await isAdminRequest(request, env);
   const products = await getProducts(env);
-  const product = products.cartela_de_eventos;
   return html(`<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -298,8 +304,8 @@ async function adminPage(request, env) {
   <title>ADM nBTChat Store</title>
   <style>
     :root { color-scheme: light dark; font-family: Arial, sans-serif; }
-    body { margin: 0; min-height: 100vh; background: #f4f7f5; color: #17212b; display: grid; place-items: center; }
-    main { width: min(94vw, 720px); background: white; border: 1px solid #d7ddd8; border-radius: 18px; padding: 24px; box-shadow: 0 16px 50px #0002; }
+    body { margin: 0; min-height: 100vh; background: #f4f7f5; color: #17212b; display: grid; place-items: center; padding: 24px 0; }
+    main { width: min(94vw, 900px); background: white; border: 1px solid #d7ddd8; border-radius: 18px; padding: 24px; box-shadow: 0 16px 50px #0002; }
     h1 { margin: 0 0 6px; font-size: 28px; }
     p { color: #52606d; line-height: 1.45; }
     label { display: block; font-size: 13px; font-weight: 800; margin-top: 14px; }
@@ -307,13 +313,20 @@ async function adminPage(request, env) {
     textarea { min-height: 92px; resize: vertical; }
     button { border: 0; border-radius: 14px; padding: 14px 18px; margin-top: 18px; background: #16a34a; color: white; font-weight: 900; font-size: 16px; }
     .locked { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; padding: 12px; border-radius: 12px; }
-    .grid { display: grid; grid-template-columns: 1fr 160px 160px; gap: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .product { border: 1px solid #d7ddd8; border-radius: 16px; padding: 18px; margin-top: 18px; background: #fbfcfb; }
+    .product h2 { margin: 0; font-size: 20px; }
+    .product-id { margin-top: 4px; color: #64748b; font-size: 12px; font-weight: 800; }
+    .add { background: #eefbf3; border-color: #bbf7d0; }
+    .hint { font-size: 13px; }
     @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
     @media (prefers-color-scheme: dark) {
       body { background: #101820; color: #f7f8f5; }
       main { background: #18232c; border-color: #2f3b45; }
       input, textarea { background: #24313b; border-color: #2f3b45; color: #f7f8f5; }
       .locked { background: #3a2615; border-color: #9a5a1f; color: #fed7aa; }
+      .product { background: #1d2933; border-color: #2f3b45; }
+      .add { background: #123328; border-color: #166534; }
     }
   </style>
 </head>
@@ -321,7 +334,7 @@ async function adminPage(request, env) {
   <main>
     <h1>ADM nBTChat Store</h1>
     <p>Configure os itens oficiais da loja. A chave ADM fica apenas no envio do login e depois a sessão usa cookie seguro.</p>
-    ${authenticated ? adminProductsForm(product) : adminLoginForm()}
+    ${authenticated ? adminProductsForm(products) : adminLoginForm()}
   </main>
 </body>
 </html>`);
@@ -336,9 +349,32 @@ function adminLoginForm() {
     </form>`;
 }
 
-function adminProductsForm(product) {
-  return `<form method="post" action="/admin/products">
-      <input type="hidden" name="id" value="${escapeHtml(product.id)}">
+function adminProductsForm(products) {
+  const forms = Object.values(products)
+    .sort((a, b) => String(a.title).localeCompare(String(b.title), "pt-BR"))
+    .map((product) => adminProductForm(product, false))
+    .join("");
+  const blank = adminProductForm({
+    id: "",
+    title: "",
+    price: PRODUCTS.cartela_de_eventos.price,
+    dailyFee: PRODUCTS.cartela_de_eventos.dailyFee,
+    power: PRODUCTS.cartela_de_eventos.power,
+    durationDays: PRODUCTS.cartela_de_eventos.durationDays,
+    footer: PRODUCTS.cartela_de_eventos.footer,
+  }, true);
+  return `<p class="hint">Itens salvos aqui aparecem no endpoint da loja e podem ser usados pelo app conforme forem implementados. A Cartela de eventos já usa preço, validade, taxa diária e potencializador vindos daqui.</p>
+    ${forms}
+    ${blank}`;
+}
+
+function adminProductForm(product, isNew) {
+  return `<section class="product ${isNew ? "add" : ""}">
+    <h2>${isNew ? "Adicionar novo item" : escapeHtml(product.title)}</h2>
+    ${isNew ? `<p class="product-id">Use um ID curto, sem espaços. Ex.: adesivo_premium</p>` : `<p class="product-id">${escapeHtml(product.id)}</p>`}
+    <form method="post" action="/admin/products">
+      <label>ID do item</label>
+      <input name="id" value="${escapeHtml(product.id)}" required maxlength="60" pattern="[A-Za-z0-9_-]+">
       <label>Nome do item</label>
       <input name="title" value="${escapeHtml(product.title)}" required maxlength="80">
       <div class="grid">
@@ -347,11 +383,11 @@ function adminProductsForm(product) {
           <input name="price" value="${escapeHtml(String(product.price.toFixed(2)).replace(".", ","))}" required inputmode="decimal">
         </div>
         <div>
-          <label>Validade padrÃ£o em dias</label>
+          <label>Validade padrão em dias</label>
           <input name="durationDays" value="${escapeHtml(String(product.durationDays))}" required inputmode="numeric">
         </div>
         <div>
-          <label>Taxa diÃ¡ria em R$</label>
+          <label>Taxa diária em R$</label>
           <input name="dailyFee" value="${escapeHtml(String((product.dailyFee || 0).toFixed(2)).replace(".", ","))}" required inputmode="decimal">
         </div>
         <div>
@@ -361,8 +397,9 @@ function adminProductsForm(product) {
       </div>
       <label>Rodapé/observação</label>
       <textarea name="footer" required>${escapeHtml(product.footer)}</textarea>
-      <button type="submit">Salvar item</button>
-    </form>`;
+      <button type="submit">${isNew ? "Adicionar item" : "Salvar item"}</button>
+    </form>
+  </section>`;
 }
 
 async function saveAdminProducts(request, env) {

@@ -1,9 +1,9 @@
 {
-  "versionCode": 56,
-  "versionName": "0.4.34",
+  "versionCode": 57,
+  "versionName": "0.4.35",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.34.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.35.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Melhora o menu de update e mostra progresso do download antes de abrir o instalador."
+  "changelog": "Prepara a loja para varios itens no ADM e faz a Cartela de eventos usar valores configurados no servidor."
 }
