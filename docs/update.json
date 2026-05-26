@@ -1,9 +1,9 @@
 {
-  "versionCode": 47,
-  "versionName": "0.4.25",
+  "versionCode": 48,
+  "versionName": "0.4.26",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.25.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.26.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Corrige toque longo na Cartela de eventos ativa para abrir opcoes sem abrir a cartela ao soltar."
+  "changelog": "Atualiza a borda de conexao do avatar para spinner indeterminado moderno com arco crescendo e reiniciando."
 }

@@ -4772,8 +4772,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             spinChatAvatarFrame();
         } else if (!shouldSpin && chatAvatarSpinning) {
             chatAvatarSpinning = false;
-            ring.animate().cancel();
-            ring.setRotation(0f);
             ring.setLoading(false);
         }
     }
@@ -4783,12 +4781,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!chatAvatarSpinning || ring == null) {
             return;
         }
-        ring.animate()
-                .rotationBy(360f)
-                .setDuration(1100L)
-                .setInterpolator(new LinearInterpolator())
-                .withEndAction(this::spinChatAvatarFrame)
-                .start();
+        ring.startLoading();
     }
 
     private LoadingRingView statusRingView(FrameLayout frame) {
@@ -6508,12 +6501,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private final class LoadingRingView extends View {
+        private static final long CYCLE_MS = 1400L;
+        private static final float MIN_SWEEP = 24f;
+        private static final float MAX_SWEEP = 260f;
         private final Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint arcPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF bounds = new RectF();
         private final int strokeWidth;
         private int ringColor = color("#9CA3AF");
         private boolean loading;
+        private long loadingStartedAt;
 
         LoadingRingView(Context context, int strokeWidth) {
             super(context);
@@ -6534,8 +6531,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         void setLoading(boolean value) {
             if (loading != value) {
                 loading = value;
+                if (value) {
+                    loadingStartedAt = System.currentTimeMillis();
+                }
                 invalidate();
             }
+        }
+
+        void startLoading() {
+            setLoading(true);
         }
 
         @Override
@@ -6550,7 +6554,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             basePaint.setColor(adjustAlpha(ringColor, 0.24f));
             canvas.drawOval(bounds, basePaint);
-            canvas.drawArc(bounds, -90f, 96f, false, arcPaint);
+            long elapsed = System.currentTimeMillis() - loadingStartedAt;
+            float cycle = (elapsed % CYCLE_MS) / (float) CYCLE_MS;
+            float turns = elapsed / (float) CYCLE_MS;
+            float sweep;
+            float start;
+            if (cycle < 0.5f) {
+                float t = easeInOut(cycle / 0.5f);
+                sweep = MIN_SWEEP + (MAX_SWEEP - MIN_SWEEP) * t;
+                start = turns * 250f - 90f;
+            } else {
+                float t = easeInOut((cycle - 0.5f) / 0.5f);
+                sweep = MAX_SWEEP - (MAX_SWEEP - MIN_SWEEP) * t;
+                start = turns * 250f - 90f + (MAX_SWEEP - sweep);
+            }
+            canvas.drawArc(bounds, start, sweep, false, arcPaint);
+            postInvalidateOnAnimation();
+        }
+
+        private float easeInOut(float value) {
+            float clamped = Math.max(0f, Math.min(1f, value));
+            return clamped * clamped * (3f - 2f * clamped);
         }
     }
 
