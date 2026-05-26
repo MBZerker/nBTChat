@@ -6504,6 +6504,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         private static final long CYCLE_MS = 1400L;
         private static final float MIN_SWEEP = 24f;
         private static final float MAX_SWEEP = 260f;
+        private static final float CYCLE_OFFSET = MAX_SWEEP - MIN_SWEEP;
         private final Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint arcPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF bounds = new RectF();
@@ -6555,18 +6556,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             basePaint.setColor(adjustAlpha(ringColor, 0.24f));
             canvas.drawOval(bounds, basePaint);
             long elapsed = System.currentTimeMillis() - loadingStartedAt;
+            long cycleIndex = elapsed / CYCLE_MS;
             float cycle = (elapsed % CYCLE_MS) / (float) CYCLE_MS;
-            float turns = elapsed / (float) CYCLE_MS;
             float sweep;
             float start;
             if (cycle < 0.5f) {
                 float t = easeInOut(cycle / 0.5f);
                 sweep = MIN_SWEEP + (MAX_SWEEP - MIN_SWEEP) * t;
-                start = turns * 250f - 90f;
+                start = -90f + cycleIndex * CYCLE_OFFSET;
             } else {
                 float t = easeInOut((cycle - 0.5f) / 0.5f);
                 sweep = MAX_SWEEP - (MAX_SWEEP - MIN_SWEEP) * t;
-                start = turns * 250f - 90f + (MAX_SWEEP - sweep);
+                start = -90f + cycleIndex * CYCLE_OFFSET + (MAX_SWEEP - sweep);
             }
             canvas.drawArc(bounds, start, sweep, false, arcPaint);
             postInvalidateOnAnimation();

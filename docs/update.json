@@ -1,9 +1,9 @@
 {
-  "versionCode": 48,
-  "versionName": "0.4.26",
+  "versionCode": 49,
+  "versionName": "0.4.27",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.26.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.27.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Atualiza a borda de conexao do avatar para spinner indeterminado moderno com arco crescendo e reiniciando."
+  "changelog": "Suaviza o ciclo do spinner da borda do avatar para continuar sem salto visual entre animacoes."
 }
