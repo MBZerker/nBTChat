@@ -136,6 +136,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_PROFILE_CAMERA = 111;
     private static final int REQUEST_VOICE_RECORD = 112;
     private static final int REQUEST_CHAT_CAMERA_PERMISSION = 113;
+    private static final int REQUEST_NOTIFICATIONS = 114;
     private static final int TERMS_VERSION = 1;
     private static final int MAX_GIF_BYTES = 640 * 1024;
     private static final int PROFILE_IMAGE_MAX_SIDE = 256;
@@ -481,6 +482,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 && grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             openQrScanner();
+        } else if (requestCode == REQUEST_NOTIFICATIONS
+                && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                && settingsStore.backgroundAvailable()) {
+            startOnlineService();
         }
     }
 
@@ -582,6 +588,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
             missing.add(permission);
         }
+    }
+
+    private boolean requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return false;
+        }
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
+        return true;
     }
 
     private void registerMessageReceiver() {
@@ -5747,6 +5764,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             if (isChecked) {
                 startOnlineService();
                 startBlePresenceForCurrentScreen();
+                requestNotificationPermissionIfNeeded();
                 Toast.makeText(this, "nBTChat ficara disponivel em segundo plano.", Toast.LENGTH_LONG).show();
             } else {
                 try {

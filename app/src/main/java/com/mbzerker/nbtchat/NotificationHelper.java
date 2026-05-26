@@ -14,7 +14,7 @@ import android.os.Build;
 public final class NotificationHelper {
     private static final String REQUEST_CHANNEL_ID = "bluetooth_requests";
     private static final String BACKGROUND_CHANNEL_ID = "bluetooth_background_silent";
-    private static final String MESSAGE_CHANNEL_ID = "chat_messages";
+    private static final String MESSAGE_CHANNEL_ID = "chat_messages_v2";
     private static final String UPDATE_CHANNEL_ID = "critical_updates";
     private static final int REQUEST_NOTIFICATION_ID = 42;
     private static final int UPDATE_NOTIFICATION_ID = 88;
@@ -118,9 +118,6 @@ public final class NotificationHelper {
     public static void showMessageNotification(Context context, String remoteAddress, String remoteName, String body, int unread) {
         AppSettingsStore settingsStore = new AppSettingsStore(context);
         if (!settingsStore.notificationsEnabled()) {
-            return;
-        }
-        if (!AppSettingsStore.PRESENCE_ONLINE.equals(settingsStore.userPresence())) {
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU

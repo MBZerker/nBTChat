@@ -1,9 +1,9 @@
 {
-  "versionCode": 54,
-  "versionName": "0.4.32",
+  "versionCode": 55,
+  "versionName": "0.4.33",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.32.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.33.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Adiciona opcao para ficar disponivel em segundo plano, melhora indicador de update e inclui diagnostico mesh."
+  "changelog": "Corrige notificacoes de mensagens em segundo plano com canal novo e sem depender do status online."
 }
