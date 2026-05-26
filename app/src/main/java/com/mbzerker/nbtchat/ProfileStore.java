@@ -226,6 +226,29 @@ public final class ProfileStore {
         }
     }
 
+    public Map<String, ContactIdentity> loadIdentities() {
+        Map<String, ContactIdentity> identities = new LinkedHashMap<>();
+        for (Map.Entry<String, ?> entry : identityPrefs.getAll().entrySet()) {
+            Object value = entry.getValue();
+            if (!(value instanceof String)) {
+                continue;
+            }
+            try {
+                JSONObject json = new JSONObject((String) value);
+                ContactIdentity identity = new ContactIdentity(
+                        json.optString("deviceId", ""),
+                        json.optString("identityPublicKey", ""),
+                        json.optString("bluetoothName", "")
+                );
+                if (!identity.deviceId.isEmpty()) {
+                    identities.put(entry.getKey(), identity);
+                }
+            } catch (JSONException ignored) {
+            }
+        }
+        return identities;
+    }
+
     public String addressForDeviceId(String deviceId) {
         if (deviceId == null || deviceId.trim().isEmpty()) {
             return "";

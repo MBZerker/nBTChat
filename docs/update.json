@@ -1,9 +1,9 @@
 {
-  "versionCode": 52,
-  "versionName": "0.4.30",
+  "versionCode": 53,
+  "versionName": "0.4.31",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.30.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.31.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Adiciona handshake Bluetooth assinado, derivacao HKDF e alerta quando a identidade de seguranca do contato muda."
+  "changelog": "Adiciona BLE como radar economico com ID diario rotativo e mantem o chat real no Bluetooth Classic."
 }

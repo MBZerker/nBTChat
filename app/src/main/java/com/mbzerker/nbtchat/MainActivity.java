@@ -120,7 +120,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public final class MainActivity extends Activity implements BtChatManager.Listener {
+public final class MainActivity extends Activity implements BtChatManager.Listener, BlePresenceManager.Listener {
     private static final int REQUEST_PERMISSIONS = 100;
     private static final int REQUEST_ENABLE_BT = 101;
     private static final int REQUEST_PICK_PHOTO = 102;
@@ -166,6 +166,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final long SCANNER_DISCOVERY_REST_MS = 90_000L;
     private static final long CONNECT_BACKOFF_MS = 15_000L;
     private static final long OWNED_CARTELA_SYNC_INTERVAL_MS = 60_000L;
+    private static final long BLE_NEARBY_WINDOW_MS = 90_000L;
 
     private final Map<String, BtChatManager.DeviceCandidate> discoveredDevices = new LinkedHashMap<>();
     private final Map<String, TextView> receiptViews = new LinkedHashMap<>();
@@ -187,6 +188,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private ThemeStore themeStore;
     private AppSettingsStore settingsStore;
     private BtChatManager btChatManager;
+    private BlePresenceManager blePresenceManager;
     private TextView stateText;
     private EditText conversationSearchInput;
     private LinearLayout contactList;
@@ -250,6 +252,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final Set<String> homePresenceProbeAddresses = new HashSet<>();
     private final Set<String> homePresenceConnecting = new HashSet<>();
     private final Map<String, PendingIdentityTrust> pendingIdentityWarnings = new HashMap<>();
+    private final Map<String, Long> blePeerSeenAt = new HashMap<>();
     private final Map<String, String> contactPresence = new HashMap<>();
     private final Map<String, Long> remoteTypingUntil = new HashMap<>();
     private final List<CartelaPurchaseLine> cartelaPurchaseLines = new ArrayList<>();
@@ -296,6 +299,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         settingsStore = new AppSettingsStore(this);
         darkMode = themeStore.isDarkMode();
         btChatManager = new BtChatManager(this, this);
+        blePresenceManager = new BlePresenceManager(this, identityStore, profileStore, this);
         NotificationHelper.ensureChannels(this);
         NotificationHelper.cancelBackgroundNotification(this);
         try {
@@ -394,6 +398,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.stopDiscovery();
             btChatManager.stop();
         }
+        stopBlePresence();
         stopPeriodicUpdateChecks();
         stopTable100AutoSync();
         super.onStop();
@@ -408,6 +413,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (btChatManager != null) {
             btChatManager.stop();
         }
+        stopBlePresence();
         unregisterMessageReceiver();
     }
 
@@ -799,9 +805,36 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         bluetoothEnablePromptShown = false;
         startOnlineService();
+        startBlePresenceForCurrentScreen();
         if ("scanner".equals(currentScreen) && discoveredDevices.isEmpty()) {
             startScannerDiscoveryCycle();
         }
+    }
+
+    private void startBlePresenceForCurrentScreen() {
+        if (blePresenceManager == null || requestWouldNeedBlePermission()) {
+            return;
+        }
+        if ("scanner".equals(currentScreen) || "chat".equals(currentScreen)) {
+            blePresenceManager.startAggressive();
+        } else if (profileStore != null && profileStore.hasLocalProfile()) {
+            blePresenceManager.startEconomy();
+        }
+    }
+
+    private void stopBlePresence() {
+        if (blePresenceManager != null) {
+            blePresenceManager.stop();
+        }
+    }
+
+    private boolean requestWouldNeedBlePermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return false;
+        }
+        return checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED;
     }
 
     private void showInitialScreen() {
@@ -858,6 +891,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
 
         currentScreen = "home";
+        startBlePresenceForCurrentScreen();
         messageList = null;
 
         LinearLayout root = vertical();
@@ -1055,6 +1089,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         stopHomePresenceProbe();
         stopScannerDiscoveryCycle();
         currentScreen = "updates";
+        startBlePresenceForCurrentScreen();
         messageList = null;
 
         LinearLayout root = vertical();
@@ -1258,6 +1293,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showNearbyScannerScreen(boolean autoStart) {
         stopHomePresenceProbe();
         currentScreen = "scanner";
+        startBlePresenceForCurrentScreen();
         messageList = null;
 
         LinearLayout root = vertical();
@@ -1769,6 +1805,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return "Bloqueado";
         }
         String suffix = profileStore.isMuted(address) ? "Silenciado - " : "";
+        if (isBlePeerNearby(address) && !onlineAddresses.contains(address) && !btChatManager.isConnectedTo(address)) {
+            suffix += "Por perto - ";
+        }
         if (conversation.lastBody != null && !conversation.lastBody.isEmpty()) {
             return suffix + conversation.lastBody;
         }
@@ -1776,6 +1815,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return suffix + profile.getStatus();
         }
         return suffix + "Toque para abrir a conversa";
+    }
+
+    private boolean isBlePeerNearby(String address) {
+        Long seenAt = blePeerSeenAt.get(address);
+        return seenAt != null && System.currentTimeMillis() - seenAt <= BLE_NEARBY_WINDOW_MS;
     }
 
     private String contactPresenceStatus(String address) {
@@ -1902,6 +1946,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.stopDiscovery();
         }
         currentScreen = "chat";
+        startBlePresenceForCurrentScreen();
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         currentFingerprint = fingerprint == null ? "" : fingerprint;
         replyPreviewBar = null;
@@ -2600,6 +2645,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         stopScannerDiscoveryCycle();
         syncOwnedCartelaIfUseful();
         currentScreen = "store";
+        startBlePresenceForCurrentScreen();
         messageList = null;
 
         ScrollView scrollView = new ScrollView(this);
@@ -4975,6 +5021,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 subtitleColor = "#16A34A";
             } else if (profileStore.isBlocked(currentRemoteAddress)) {
                 subtitle = "Bloqueado";
+            } else if (isBlePeerNearby(currentRemoteAddress) && !btChatManager.canSendTo(currentRemoteAddress)) {
+                subtitle = "Por perto";
+                subtitleColor = "#16A34A";
             } else {
                 subtitle = currentRemoteProfile.getStatus().isEmpty() ? "Bluetooth seguro" : currentRemoteProfile.getStatus();
             }
@@ -5065,6 +5114,19 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             renderNearbyDeviceList();
         } else if ("home".equals(currentScreen)) {
             renderContactList();
+        }
+    }
+
+    @Override
+    public void onBlePeerSeen(String address, String bleIdHex, int rssi, long timestamp) {
+        if (address == null || address.trim().isEmpty() || profileStore.isBlocked(address)) {
+            return;
+        }
+        blePeerSeenAt.put(address, timestamp);
+        if ("home".equals(currentScreen)) {
+            renderContactList();
+        } else if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+            updateChatHeaderProfile();
         }
     }
 
@@ -5472,6 +5534,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showSettingsScreen() {
         stopHomePresenceProbe();
         currentScreen = "settings";
+        startBlePresenceForCurrentScreen();
         messageList = null;
 
         ScrollView scrollView = new ScrollView(this);
