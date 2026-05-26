@@ -112,6 +112,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -242,9 +243,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private Runnable updateCheckRunnable;
     private Runnable table100AutoSyncRunnable;
     private Runnable scannerDiscoveryRunnable;
+    private Runnable homePresenceProbeRunnable;
     private long lastOwnedCartelaSyncAt;
     private long lastDiscoverableRequestAt;
     private final Set<String> onlineAddresses = new HashSet<>();
+    private final Set<String> homePresenceProbeAddresses = new HashSet<>();
+    private final Set<String> homePresenceConnecting = new HashSet<>();
     private final Map<String, String> contactPresence = new HashMap<>();
     private final Map<String, Long> remoteTypingUntil = new HashMap<>();
     private final List<CartelaPurchaseLine> cartelaPurchaseLines = new ArrayList<>();
@@ -931,6 +935,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         attachTopLevelSwipe(root);
         setContentView(root);
         requestInsets(root);
+        startHomePresenceProbeOnce();
 
     }
 
@@ -954,6 +959,76 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return addresses.size();
     }
 
+    private void startHomePresenceProbeOnce() {
+        stopHomePresenceProbe();
+        if (btChatManager == null || !btChatManager.isBluetoothEnabled()) {
+            return;
+        }
+        Map<String, BtChatManager.DeviceCandidate> paired = btChatManager.pairedCandidatesByAddress();
+        if (paired.isEmpty()) {
+            return;
+        }
+        Set<String> addresses = new LinkedHashSet<>();
+        addresses.addAll(profileStore.loadContacts().keySet());
+        addresses.addAll(messageStore.loadConversationInfo().keySet());
+        List<String> targets = new ArrayList<>();
+        for (String address : addresses) {
+            if (address == null || address.trim().isEmpty() || profileStore.isBlocked(address)) {
+                continue;
+            }
+            if (btChatManager.isConnectedTo(address)) {
+                continue;
+            }
+            if (paired.containsKey(address)) {
+                targets.add(address);
+            }
+        }
+        if (targets.isEmpty()) {
+            return;
+        }
+        homePresenceProbeAddresses.addAll(targets);
+        runHomePresenceProbe(targets, 0);
+    }
+
+    private void runHomePresenceProbe(List<String> targets, int index) {
+        if (!"home".equals(currentScreen) || targets == null || index >= targets.size()) {
+            homePresenceConnecting.clear();
+            homePresenceProbeAddresses.clear();
+            if ("home".equals(currentScreen)) {
+                renderContactList();
+            }
+            return;
+        }
+        String address = targets.get(index);
+        BtChatManager.DeviceCandidate candidate = btChatManager == null ? null : btChatManager.getPairedCandidate(address);
+        if (candidate == null || btChatManager.isConnectedTo(address) || profileStore.isBlocked(address)) {
+            runHomePresenceProbe(targets, index + 1);
+            return;
+        }
+        homePresenceConnecting.clear();
+        homePresenceConnecting.add(address);
+        renderContactList();
+        btChatManager.connect(candidate);
+        homePresenceProbeRunnable = () -> {
+            homePresenceProbeRunnable = null;
+            homePresenceConnecting.remove(address);
+            if ("home".equals(currentScreen)) {
+                renderContactList();
+                runHomePresenceProbe(targets, index + 1);
+            }
+        };
+        uiHandler.postDelayed(homePresenceProbeRunnable, 3500L);
+    }
+
+    private void stopHomePresenceProbe() {
+        if (homePresenceProbeRunnable != null) {
+            uiHandler.removeCallbacks(homePresenceProbeRunnable);
+            homePresenceProbeRunnable = null;
+        }
+        homePresenceConnecting.clear();
+        homePresenceProbeAddresses.clear();
+    }
+
     private View bottomNavBar() {
         LinearLayout bar = horizontal();
         bar.setGravity(Gravity.CENTER);
@@ -966,6 +1041,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showUpdatesScreen() {
+        stopHomePresenceProbe();
         stopScannerDiscoveryCycle();
         currentScreen = "updates";
         messageList = null;
@@ -1169,6 +1245,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showNearbyScannerScreen(boolean autoStart) {
+        stopHomePresenceProbe();
         currentScreen = "scanner";
         messageList = null;
 
@@ -1468,13 +1545,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }, 35_000L);
             return;
         }
-        if (candidate != null) {
+        if (candidate != null && candidate.paired) {
             pendingOpenChatAddress = address;
             openNextQrConnectionUntil = System.currentTimeMillis() + 45_000L;
             Toast.makeText(this, "Conectando pelo QR...", Toast.LENGTH_SHORT).show();
-            btChatManager.connectDirect(candidate);
+            btChatManager.connect(candidate);
         } else {
-            Toast.makeText(this, "Nao consegui conectar diretamente. Pareie no Android ou deixe o aparelho visivel.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Contato salvo. Para parear, use a tela de encontrar aparelhos.", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1496,10 +1573,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         pendingQrInvite = null;
-        pendingOpenChatAddress = candidate.address;
-        openNextQrConnectionUntil = System.currentTimeMillis() + 45_000L;
-        Toast.makeText(this, "Aparelho encontrado. Conectando pelo QR...", Toast.LENGTH_SHORT).show();
-        btChatManager.connectDirect(candidate);
+        if (candidate.paired) {
+            pendingOpenChatAddress = candidate.address;
+            openNextQrConnectionUntil = System.currentTimeMillis() + 45_000L;
+            Toast.makeText(this, "Aparelho encontrado. Conectando pelo QR...", Toast.LENGTH_SHORT).show();
+            btChatManager.connect(candidate);
+        } else {
+            Toast.makeText(this, "Aparelho encontrado. Para parear, use a tela de encontrar aparelhos.", Toast.LENGTH_LONG).show();
+        }
     }
 
     private void requestDiscoverableForScanner() {
@@ -1595,7 +1676,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             invite.setBackground(rounded(accent(), dp(18), accent()));
             row.setBackground(rounded(darkMode ? "#2A332B" : "#FFF4E8", dp(12), accent()));
             Toast.makeText(this, "Convite enviado para " + candidate.name + ".", Toast.LENGTH_SHORT).show();
-            btChatManager.connect(candidate);
+            btChatManager.connectDirect(candidate);
             invite.postDelayed(() -> {
                 if ("scanner".equals(currentScreen)) {
                     invite.setEnabled(true);
@@ -1629,8 +1710,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return true;
         });
 
-        row.addView(avatarStatusFrame(known, contactPresenceStatus(address), dp(58), dp(18), dp(4), false, null),
-                new LinearLayout.LayoutParams(dp(58), dp(58)));
+        FrameLayout avatarFrame = avatarStatusFrame(known, contactPresenceStatus(address), dp(58), dp(18), dp(4), false, null);
+        LoadingRingView ring = statusRingView(avatarFrame);
+        if (ring != null && homePresenceConnecting.contains(address)) {
+            ring.startLoading();
+        }
+        row.addView(avatarFrame, new LinearLayout.LayoutParams(dp(58), dp(58)));
 
         LinearLayout info = vertical();
         String title = known.isComplete() ? known.getDisplayName() : (candidate == null ? "Contato nBTChat" : candidate.name);
@@ -1800,6 +1885,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showChatScreen(UserProfile profile, String fingerprint) {
+        stopHomePresenceProbe();
         if (btChatManager != null) {
             stopScannerDiscoveryCycle();
             btChatManager.stopDiscovery();
@@ -2431,6 +2517,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showStoreScreen() {
+        stopHomePresenceProbe();
         stopScannerDiscoveryCycle();
         syncOwnedCartelaIfUseful();
         currentScreen = "store";
@@ -3291,14 +3378,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             flushPendingOutgoing(address);
             return;
         }
-        if (repairIfPaired && btChatManager.getPairedCandidate(address) != null) {
-            if (tryRepairPairing(address)) {
-                Toast.makeText(this, "Tentando refazer o pareamento para enviar a mensagem.", Toast.LENGTH_LONG).show();
-            }
+        BtChatManager.DeviceCandidate paired = btChatManager.getPairedCandidate(address);
+        if (paired != null) {
+            btChatManager.connect(paired);
             return;
         }
-        if (tryWakeAddress(address)) {
-            Toast.makeText(this, "Tentando acordar o contato pelo Bluetooth.", Toast.LENGTH_SHORT).show();
+        if (!repairIfPaired) {
+            Toast.makeText(this, "Este contato ainda nao esta pareado. Use a tela de encontrar aparelhos para parear.", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -3381,8 +3467,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             lastConnectAttemptAt.put(address, now);
             btChatManager.connect(target);
-        } else if (target == null) {
-            tryWakeAddress(address);
         }
     }
 
@@ -4047,14 +4131,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         saveSharedContact(payload);
-        BtChatManager.DeviceCandidate candidate = btChatManager.getDirectCandidate(payload.address, payload.bluetoothName);
+        BtChatManager.DeviceCandidate candidate = btChatManager.getPairedCandidate(payload.address);
+        if (candidate == null) {
+            BtChatManager.DeviceCandidate namedPaired = btChatManager.getDirectCandidate(payload.address, payload.bluetoothName);
+            if (namedPaired != null && namedPaired.paired) {
+                candidate = namedPaired;
+            }
+        }
         if (candidate == null) {
             Toast.makeText(this, "Quando este aparelho estiver por perto, procure ou pareie pelo Bluetooth.", Toast.LENGTH_LONG).show();
             return;
         }
         pendingOpenChatAddress = candidate.address;
         openNextQrConnectionUntil = System.currentTimeMillis() + 45_000L;
-        btChatManager.connectDirect(candidate);
+        btChatManager.connect(candidate);
     }
 
     private GridLayout table100Grid(GadgetStore.Table100Payload payload, boolean mine, boolean fullScreen, boolean owner) {
@@ -4939,6 +5029,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         UserProfile profileValue = profile == null ? UserProfile.empty() : profile;
         String fingerprintValue = fingerprint == null ? "" : fingerprint;
         lastConnectAttemptAt.remove(address);
+        homePresenceConnecting.remove(address);
         onlineAddresses.add(address);
         contactPresence.put(address, AppSettingsStore.PRESENCE_ONLINE);
         profileStore.saveContact(address, profileValue);
@@ -5061,6 +5152,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String clean = "busy".equals(status)
                 ? AppSettingsStore.PRESENCE_BUSY
                 : ("online".equals(status) ? AppSettingsStore.PRESENCE_ONLINE : AppSettingsStore.PRESENCE_INVISIBLE);
+        homePresenceConnecting.remove(address);
         contactPresence.put(address, clean);
         if (AppSettingsStore.PRESENCE_INVISIBLE.equals(clean)) {
             onlineAddresses.remove(address);
@@ -5079,7 +5171,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String address = remoteAddress == null ? "" : remoteAddress;
         if (!address.isEmpty()) {
             onlineAddresses.remove(address);
-            contactPresence.put(address, AppSettingsStore.PRESENCE_INVISIBLE);
+            homePresenceConnecting.remove(address);
+            if (!("home".equals(currentScreen) && homePresenceProbeAddresses.contains(address))) {
+                contactPresence.put(address, AppSettingsStore.PRESENCE_INVISIBLE);
+            }
             remoteTypingUntil.remove(address);
         }
         if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
@@ -5097,6 +5192,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if ("chat".equals(currentScreen) && isQuietConnectionMessage(message)) {
             updateChatHeaderStatus();
+            return;
+        }
+        if ("home".equals(currentScreen) && !homePresenceConnecting.isEmpty() && isQuietConnectionMessage(message)) {
+            renderContactList();
             return;
         }
         if (!"chat".equals(currentScreen)) {
@@ -5119,6 +5218,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return value.contains("encerrou")
                 || value.contains("encerrada")
                 || value.contains("erro na conexao")
+                || value.contains("nao foi possivel conectar")
                 || value.contains("nenhuma conversa conectada");
     }
 
@@ -5262,6 +5362,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showSettingsScreen() {
+        stopHomePresenceProbe();
         currentScreen = "settings";
         messageList = null;
 
