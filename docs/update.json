@@ -1,9 +1,9 @@
 {
-  "versionCode": 46,
-  "versionName": "0.4.24",
+  "versionCode": 47,
+  "versionName": "0.4.25",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.24.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.25.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Corrige recuperacao de compra sem sucesso para nao travar a loja; adiciona cancelar operacao pendente."
+  "changelog": "Corrige toque longo na Cartela de eventos ativa para abrir opcoes sem abrir a cartela ao soltar."
 }

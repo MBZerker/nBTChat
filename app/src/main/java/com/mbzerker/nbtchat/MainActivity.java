@@ -2527,8 +2527,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Button buyMore = pillButton("Comprar mais cartelas", surfaceAlt(), primary());
             buyMore.setOnClickListener(v -> startCartelaPurchase());
             item.addView(buyMore, topMargin(dp(8)));
-            item.setOnClickListener(v -> showTable100OptionsDialog());
-            card.setOnClickListener(v -> showTable100OptionsDialog());
+            View.OnClickListener openCartela = v -> showTable100PlayScreen(gadgetStore.table100Payload().toMessageBody());
+            View.OnLongClickListener optionsMenu = v -> {
+                showTable100OptionsDialog();
+                return true;
+            };
+            item.setOnClickListener(openCartela);
+            item.setOnLongClickListener(optionsMenu);
+            card.setOnClickListener(openCartela);
+            card.setOnLongClickListener(optionsMenu);
         } else if (gadgetStore.hasPendingTable100Payment()) {
             boolean recoveryPending = isPendingCartelaRecovery();
             TextView pending = text(recoveryPending
