@@ -103,7 +103,14 @@ public final class BluetoothForegroundService extends Service implements BtChatM
 
     @Override
     public void onRemoteIdentity(String remoteAddress, String deviceId, String identityPublicKey) {
-        profileStore.saveIdentity(remoteAddress, deviceId, identityPublicKey);
+        profileStore.verifyOrStoreIdentity(remoteAddress, deviceId, identityPublicKey, "");
+    }
+
+    @Override
+    public void onIdentityWarning(String remoteAddress, String status, String deviceId, String identityPublicKey, String fingerprint) {
+        if (remoteAddress != null && !remoteAddress.trim().isEmpty()) {
+            profileStore.setBlocked(remoteAddress, true);
+        }
     }
 
     @Override

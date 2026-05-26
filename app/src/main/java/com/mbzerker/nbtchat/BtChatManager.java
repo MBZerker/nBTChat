@@ -52,6 +52,8 @@ public final class BtChatManager {
 
         void onRemoteIdentity(String remoteAddress, String deviceId, String identityPublicKey);
 
+        void onIdentityWarning(String remoteAddress, String status, String deviceId, String identityPublicKey, String fingerprint);
+
         void onMessageReceived(String remoteAddress, String id, String kind, String body, String mediaBase64, long durationMs, long sentAt, String replyToId, String replyPreview);
 
         void onReceiptReceived(String remoteAddress, String id, String status);
@@ -91,6 +93,7 @@ public final class BtChatManager {
     private final IdentityStore identityStore;
     private final RelayStore relayStore;
     private final AppSettingsStore settingsStore;
+    private static final int PROTOCOL_V2 = 2;
 
     private AcceptThread secureAcceptThread;
     private AcceptThread insecureAcceptThread;
@@ -838,12 +841,21 @@ public final class BtChatManager {
 
                 UserProfile localProfile = profileStore.loadLocalProfile();
                 CryptoSession.Handshake handshake = CryptoSession.createHandshake();
+                String localNonce = CryptoSession.randomNonce();
                 JSONObject hello = new JSONObject();
                 hello.put("type", "hello");
-                hello.put("protocol", 1);
+                hello.put("protocol", PROTOCOL_V2);
                 hello.put("publicKey", handshake.getPublicKeyBase64());
                 hello.put("deviceId", identityStore.getDeviceId());
                 hello.put("identityPublicKey", identityStore.getPublicKeyBase64());
+                hello.put("nonce", localNonce);
+                hello.put("signature", identityStore.sign(CryptoSession.handshakeBytes(
+                        PROTOCOL_V2,
+                        handshake.getPublicKeyBase64(),
+                        identityStore.getDeviceId(),
+                        identityStore.getPublicKeyBase64(),
+                        localNonce
+                )));
                 hello.put("profile", localProfile.toJson());
                 hello.put("allowContactSharing", settingsStore.contactSharingEnabled());
                 writeFrame(hello.toString());
@@ -854,11 +866,39 @@ public final class BtChatManager {
                 }
 
                 UserProfile remoteProfile = UserProfile.fromJson(remoteHello.optJSONObject("profile"));
+                int remoteProtocol = remoteHello.optInt("protocol", 1);
+                String remotePublicKey = remoteHello.getString("publicKey");
                 remoteDeviceId = remoteHello.optString("deviceId", "");
                 remoteIdentityPublicKey = remoteHello.optString("identityPublicKey", "");
-                cryptoSession = CryptoSession.derive(handshake, remoteHello.getString("publicKey"));
+                if (remoteProtocol >= PROTOCOL_V2) {
+                    boolean signatureOk = identityStore.verify(
+                            remoteIdentityPublicKey,
+                            CryptoSession.handshakeBytes(
+                                    remoteProtocol,
+                                    remotePublicKey,
+                                    remoteDeviceId,
+                                    remoteIdentityPublicKey,
+                                    remoteHello.optString("nonce", "")
+                            ),
+                            remoteHello.optString("signature", "")
+                    );
+                    if (!signatureOk) {
+                        mainHandler.post(() -> listener.onIdentityWarning(remoteAddress, ProfileStore.IdentityStatus.INVALID.name(), remoteDeviceId, remoteIdentityPublicKey, ""));
+                        throw new IOException("Nao foi possivel confirmar a identidade deste contato.");
+                    }
+                    cryptoSession = CryptoSession.deriveV2(handshake, remotePublicKey);
+                } else {
+                    cryptoSession = CryptoSession.deriveLegacy(handshake, remotePublicKey);
+                    mainHandler.post(() -> listener.onIdentityWarning(remoteAddress, "LEGACY", remoteDeviceId, remoteIdentityPublicKey, cryptoSession.getFingerprint()));
+                }
                 profileStore.saveContact(remoteAddress, remoteProfile);
-                profileStore.saveIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey, safeName(socket.getRemoteDevice()));
+                ProfileStore.IdentityStatus identityStatus = profileStore.verifyOrStoreIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey, safeName(socket.getRemoteDevice()));
+                if (identityStatus == ProfileStore.IdentityStatus.CHANGED_KEY
+                        || identityStatus == ProfileStore.IdentityStatus.CHANGED_DEVICE
+                        || identityStatus == ProfileStore.IdentityStatus.INVALID) {
+                    mainHandler.post(() -> listener.onIdentityWarning(remoteAddress, identityStatus.name(), remoteDeviceId, remoteIdentityPublicKey, cryptoSession.getFingerprint()));
+                    throw new IOException("A identidade de seguranca deste contato mudou.");
+                }
                 profileStore.setContactShareAllowed(remoteAddress, remoteHello.optBoolean("allowContactSharing", false));
 
                 mainHandler.post(() -> listener.onRemoteProfile(remoteAddress, remoteProfile));
@@ -1112,7 +1152,13 @@ public final class BtChatManager {
             String deviceId = profileJson.optString("deviceId", "");
             String identityPublicKey = profileJson.optString("identityPublicKey", "");
             profileStore.saveContact(remoteAddress, profile);
-            profileStore.saveIdentity(remoteAddress, deviceId, identityPublicKey);
+            ProfileStore.IdentityStatus identityStatus = profileStore.verifyOrStoreIdentity(remoteAddress, deviceId, identityPublicKey, safeName(socket.getRemoteDevice()));
+            if (identityStatus == ProfileStore.IdentityStatus.CHANGED_KEY
+                    || identityStatus == ProfileStore.IdentityStatus.CHANGED_DEVICE
+                    || identityStatus == ProfileStore.IdentityStatus.INVALID) {
+                mainHandler.post(() -> listener.onIdentityWarning(remoteAddress, identityStatus.name(), deviceId, identityPublicKey, cryptoSession == null ? "" : cryptoSession.getFingerprint()));
+                return;
+            }
             profileStore.setContactShareAllowed(remoteAddress, profileJson.optBoolean("allowContactSharing", false));
             mainHandler.post(() -> listener.onRemoteIdentity(remoteAddress, deviceId, identityPublicKey));
             mainHandler.post(() -> listener.onRemoteProfile(remoteAddress, profile));
@@ -1161,7 +1207,14 @@ public final class BtChatManager {
             }
             String sourceIdentityPublicKey = opened.optString("sourceIdentityPublicKey", "");
             if (sourceDeviceId != null && !sourceDeviceId.isEmpty() && !sourceIdentityPublicKey.isEmpty()) {
-                profileStore.saveIdentity(address, sourceDeviceId, sourceIdentityPublicKey);
+                ProfileStore.IdentityStatus identityStatus = profileStore.verifyOrStoreIdentity(address, sourceDeviceId, sourceIdentityPublicKey, "");
+                if (identityStatus == ProfileStore.IdentityStatus.CHANGED_KEY
+                        || identityStatus == ProfileStore.IdentityStatus.CHANGED_DEVICE
+                        || identityStatus == ProfileStore.IdentityStatus.INVALID) {
+                    String callbackAddress = address;
+                    mainHandler.post(() -> listener.onIdentityWarning(callbackAddress, identityStatus.name(), sourceDeviceId, sourceIdentityPublicKey, ""));
+                    return address;
+                }
                 String callbackAddress = address;
                 mainHandler.post(() -> listener.onRemoteIdentity(callbackAddress, sourceDeviceId, sourceIdentityPublicKey));
             }

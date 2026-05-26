@@ -9,6 +9,7 @@ import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
@@ -37,6 +38,26 @@ public final class IdentityStore {
     public PrivateKey getPrivateKey() throws Exception {
         byte[] raw = Base64.decode(prefs.getString(KEY_PRIVATE, ""), Base64.NO_WRAP);
         return KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(raw));
+    }
+
+    public String sign(byte[] data) throws Exception {
+        Signature signature = Signature.getInstance("SHA256withECDSA");
+        signature.initSign(getPrivateKey());
+        signature.update(data);
+        return Base64.encodeToString(signature.sign(), Base64.NO_WRAP);
+    }
+
+    public boolean verify(String publicKeyBase64, byte[] data, String signatureBase64) {
+        try {
+            byte[] publicBytes = Base64.decode(publicKeyBase64, Base64.NO_WRAP);
+            PublicKey publicKey = KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(publicBytes));
+            Signature signature = Signature.getInstance("SHA256withECDSA");
+            signature.initVerify(publicKey);
+            signature.update(data);
+            return signature.verify(Base64.decode(signatureBase64, Base64.NO_WRAP));
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void ensureIdentity() {

@@ -134,6 +134,31 @@ public final class ProfileStore {
         }
     }
 
+    public IdentityStatus verifyOrStoreIdentity(String address, String deviceId, String identityPublicKey, String bluetoothName) {
+        if (address == null || address.trim().isEmpty()
+                || deviceId == null || deviceId.trim().isEmpty()
+                || identityPublicKey == null || identityPublicKey.trim().isEmpty()) {
+            return IdentityStatus.INVALID;
+        }
+        ContactIdentity existing = loadIdentity(address);
+        if (existing.deviceId.isEmpty() && existing.identityPublicKey.isEmpty()) {
+            saveIdentity(address, deviceId, identityPublicKey, bluetoothName);
+            return IdentityStatus.NEW;
+        }
+        boolean sameDevice = existing.deviceId.equals(deviceId);
+        boolean sameKey = existing.identityPublicKey.equals(identityPublicKey);
+        if (sameDevice && sameKey) {
+            if (bluetoothName != null && !bluetoothName.trim().isEmpty() && !bluetoothName.trim().equals(existing.bluetoothName)) {
+                saveIdentity(address, deviceId, identityPublicKey, bluetoothName);
+            }
+            return IdentityStatus.MATCH;
+        }
+        if (!sameKey) {
+            return IdentityStatus.CHANGED_KEY;
+        }
+        return IdentityStatus.CHANGED_DEVICE;
+    }
+
     public void removeContact(String address) {
         if (address == null || address.trim().isEmpty()) {
             return;
@@ -235,5 +260,13 @@ public final class ProfileStore {
             this.identityPublicKey = identityPublicKey;
             this.bluetoothName = bluetoothName == null ? "" : bluetoothName;
         }
+    }
+
+    public enum IdentityStatus {
+        NEW,
+        MATCH,
+        CHANGED_KEY,
+        CHANGED_DEVICE,
+        INVALID
     }
 }

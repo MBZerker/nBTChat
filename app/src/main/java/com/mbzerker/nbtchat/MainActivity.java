@@ -249,6 +249,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final Set<String> onlineAddresses = new HashSet<>();
     private final Set<String> homePresenceProbeAddresses = new HashSet<>();
     private final Set<String> homePresenceConnecting = new HashSet<>();
+    private final Map<String, PendingIdentityTrust> pendingIdentityWarnings = new HashMap<>();
     private final Map<String, String> contactPresence = new HashMap<>();
     private final Map<String, Long> remoteTypingUntil = new HashMap<>();
     private final List<CartelaPurchaseLine> cartelaPurchaseLines = new ArrayList<>();
@@ -2094,6 +2095,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         key.setPadding(dp(12), dp(10), dp(12), dp(10));
         key.setBackground(rounded(surfaceAlt(), dp(12), border()));
         content.addView(key, topMargin(dp(6)));
+        PendingIdentityTrust warning = pendingIdentityWarnings.get(currentRemoteAddress);
+        if (warning != null) {
+            TextView warningText = text(identityWarningMessage(warning.status), 14, "#DC2626", Typeface.BOLD);
+            warningText.setLineSpacing(dp(2), 1f);
+            content.addView(warningText, topMargin(dp(12)));
+            Button trust = pillButton("Confiar nesta identidade", "#16A34A", "#FFFFFF");
+            trust.setOnClickListener(v -> trustIdentity(currentRemoteAddress));
+            content.addView(trust, topMargin(dp(10)));
+            Button block = pillButton("Bloquear / nao confiar", surfaceAlt(), primary());
+            block.setOnClickListener(v -> blockIdentity(currentRemoteAddress));
+            content.addView(block, topMargin(dp(8)));
+        }
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setView(content)
@@ -2105,6 +2118,60 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         });
         dialog.show();
+    }
+
+    private void showIdentityWarningDialog(String address, PendingIdentityTrust warning) {
+        String name = safeName(profileStore.loadContact(address).getDisplayName(), "Contato nBTChat");
+        new AlertDialog.Builder(this)
+                .setTitle("Verifique a seguranca")
+                .setMessage(identityWarningMessage(warning.status)
+                        + "\n\nContato: " + name
+                        + "\nCodigo de seguranca:\n" + (warning.fingerprint == null || warning.fingerprint.isEmpty() ? "Indisponivel nesta conexao." : warning.fingerprint)
+                        + "\n\nConfirme este codigo com a pessoa por outro meio antes de confiar.")
+                .setPositiveButton("Confiar", (dialog, which) -> trustIdentity(address))
+                .setNegativeButton("Nao confiar", (dialog, which) -> blockIdentity(address))
+                .setNeutralButton("Depois", null)
+                .show();
+    }
+
+    private String identityWarningMessage(String status) {
+        if ("LEGACY".equals(status)) {
+            return "Este contato esta usando seguranca legada. A conversa continua criptografada, mas o primeiro contato nao foi autenticado pelo novo protocolo.";
+        }
+        if (ProfileStore.IdentityStatus.CHANGED_KEY.name().equals(status)) {
+            return "A chave de seguranca deste contato mudou. Isso pode acontecer apos reinstalacao, mas tambem pode indicar tentativa de interceptacao.";
+        }
+        if (ProfileStore.IdentityStatus.CHANGED_DEVICE.name().equals(status)) {
+            return "O identificador deste contato mudou. Verifique antes de continuar.";
+        }
+        return "Nao foi possivel confirmar a identidade de seguranca deste contato.";
+    }
+
+    private void trustIdentity(String address) {
+        PendingIdentityTrust warning = pendingIdentityWarnings.remove(address);
+        if (warning == null) {
+            return;
+        }
+        if (!"LEGACY".equals(warning.status)) {
+            profileStore.saveIdentity(address, warning.deviceId, warning.identityPublicKey);
+        }
+        if (warning.fingerprint != null && !warning.fingerprint.isEmpty()) {
+            profileStore.saveFingerprint(address, warning.fingerprint);
+        }
+        Toast.makeText(this, "Identidade confiada.", Toast.LENGTH_SHORT).show();
+        if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+            updateChatHeaderProfile();
+        }
+    }
+
+    private void blockIdentity(String address) {
+        pendingIdentityWarnings.remove(address);
+        profileStore.setBlocked(address, true);
+        if (address != null && address.equals(currentRemoteAddress)) {
+            btChatManager.disconnectCurrent();
+            updateChatHeaderProfile();
+        }
+        Toast.makeText(this, "Contato bloqueado.", Toast.LENGTH_SHORT).show();
     }
 
     private void showFullscreenPhoto(UserProfile profile) {
@@ -4899,7 +4966,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (chatSubtitleText != null) {
             String subtitle;
             String subtitleColor = secondary();
-            if (isRemoteTyping(currentRemoteAddress)) {
+            PendingIdentityTrust warning = pendingIdentityWarnings.get(currentRemoteAddress);
+            if (warning != null) {
+                subtitle = "Verifique a chave de seguranca";
+                subtitleColor = "#DC2626";
+            } else if (isRemoteTyping(currentRemoteAddress)) {
                 subtitle = "Digitando";
                 subtitleColor = "#16A34A";
             } else if (profileStore.isBlocked(currentRemoteAddress)) {
@@ -5022,7 +5093,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     @Override
     public void onRemoteIdentity(String remoteAddress, String deviceId, String identityPublicKey) {
-        profileStore.saveIdentity(remoteAddress, deviceId, identityPublicKey);
+        ProfileStore.IdentityStatus status = profileStore.verifyOrStoreIdentity(remoteAddress, deviceId, identityPublicKey, "");
+        if (status == ProfileStore.IdentityStatus.CHANGED_KEY
+                || status == ProfileStore.IdentityStatus.CHANGED_DEVICE
+                || status == ProfileStore.IdentityStatus.INVALID) {
+            onIdentityWarning(remoteAddress, status.name(), deviceId, identityPublicKey, profileStore.loadFingerprint(remoteAddress));
+        }
+    }
+
+    @Override
+    public void onIdentityWarning(String remoteAddress, String status, String deviceId, String identityPublicKey, String fingerprint) {
+        String address = remoteAddress == null ? "" : remoteAddress;
+        if (address.isEmpty()) {
+            return;
+        }
+        PendingIdentityTrust warning = new PendingIdentityTrust(status, deviceId, identityPublicKey, fingerprint);
+        pendingIdentityWarnings.put(address, warning);
+        if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+            currentFingerprint = fingerprint == null ? currentFingerprint : fingerprint;
+            updateChatHeaderProfile();
+        }
+        showIdentityWarningDialog(address, warning);
     }
 
     @Override
@@ -6827,6 +6918,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         PendingDelete(String address, String id) {
             this.address = address;
             this.id = id;
+        }
+    }
+
+    private static final class PendingIdentityTrust {
+        final String status;
+        final String deviceId;
+        final String identityPublicKey;
+        final String fingerprint;
+
+        PendingIdentityTrust(String status, String deviceId, String identityPublicKey, String fingerprint) {
+            this.status = status == null ? "" : status;
+            this.deviceId = deviceId == null ? "" : deviceId;
+            this.identityPublicKey = identityPublicKey == null ? "" : identityPublicKey;
+            this.fingerprint = fingerprint == null ? "" : fingerprint;
         }
     }
 

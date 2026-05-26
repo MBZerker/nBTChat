@@ -1,9 +1,9 @@
 {
-  "versionCode": 51,
-  "versionName": "0.4.29",
+  "versionCode": 52,
+  "versionName": "0.4.30",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.29.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.30.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Melhora mensagens de erro Bluetooth e adiciona privacidade para confirmacao de leitura, respeitando status invisivel."
+  "changelog": "Adiciona handshake Bluetooth assinado, derivacao HKDF e alerta quando a identidade de seguranca do contato muda."
 }
