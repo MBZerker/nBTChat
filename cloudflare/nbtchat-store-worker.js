@@ -700,6 +700,18 @@ async function recoverPurchase(request, env) {
   if (!paymentRecord.expiresAt || paymentRecord.expiresAt <= Date.now()) {
     return resultHtml("Compra expirada", "O periodo de uso dessa compra ja terminou.", false);
   }
+  const originalDeviceId = clean(paymentRecord.deviceId);
+  if (originalDeviceId && originalDeviceId !== deviceId) {
+    const originalEntitlement = await activeEntitlement(env, originalDeviceId, product.id);
+    if (originalEntitlement.active) {
+      return resultHtml(
+        "Compra ativa em outro aparelho",
+        "Esta compra ainda esta ativa no aparelho original. Para evitar clonagem, ela nao pode ser recuperada em outro celular enquanto estiver em uso.",
+        false,
+        409
+      );
+    }
+  }
 
   await writeEntitlement(env, deviceId, product, paymentRecord);
   return resultHtml("Compra recuperada", "Volte ao nBTChat e toque em verificar para liberar a Cartela de eventos.", true);

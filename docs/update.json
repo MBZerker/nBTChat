@@ -1,9 +1,9 @@
 {
-  "versionCode": 43,
-  "versionName": "0.4.21",
+  "versionCode": 44,
+  "versionName": "0.4.22",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.21.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.22.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Corrige a tentativa de conexao Bluetooth entre aparelhos pareados e suaviza a animacao de loading da borda."
+  "changelog": "Bloqueia recuperacao de cartela ativa em outro aparelho; adiciona comandos ADM para ajustar velocidade da borda de conexao."
 }
