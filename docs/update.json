@@ -1,9 +1,9 @@
 {
-  "versionCode": 55,
-  "versionName": "0.4.33",
+  "versionCode": 56,
+  "versionName": "0.4.34",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.33.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.34.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Corrige notificacoes de mensagens em segundo plano com canal novo e sem depender do status online."
+  "changelog": "Melhora o menu de update e mostra progresso do download antes de abrir o instalador."
 }

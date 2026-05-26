@@ -76,6 +76,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.PopupWindow;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
@@ -5501,11 +5502,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private View menuRow(String label, String backgroundColor, String textColor, Runnable action) {
         TextView row = text(label, 15, textColor, Typeface.BOLD);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinHeight(dp(46));
-        row.setPadding(dp(14), 0, dp(14), 0);
+        row.setMinHeight(dp(48));
+        row.setSingleLine(false);
+        row.setMaxLines(2);
+        row.setEllipsize(TextUtils.TruncateAt.END);
+        row.setPadding(dp(14), dp(8), dp(14), dp(8));
         row.setBackground(rounded(backgroundColor, dp(9), backgroundColor));
         row.setOnClickListener(v -> action.run());
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, 0, 0, dp(6));
         row.setLayoutParams(params);
         return row;
@@ -6304,7 +6308,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void downloadAndInstallUpdateApk() {
-        Toast.makeText(this, "Baixando atualizacao...", Toast.LENGTH_SHORT).show();
+        DownloadOverlay overlay = showDownloadOverlay();
         new Thread(() -> {
             HttpURLConnection connection = null;
             try {
@@ -6316,28 +6320,107 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 if (code < 200 || code >= 300) {
                     throw new Exception("Servidor respondeu " + code);
                 }
+                int totalBytes = Math.max(0, connection.getContentLength());
                 File dir = new File(getCacheDir(), "backups");
                 if (!dir.exists() && !dir.mkdirs()) {
                     throw new Exception("Nao foi possivel preparar o download.");
                 }
                 File apk = new File(dir, "nBTChat-update.apk");
                 byte[] buffer = new byte[8192];
+                long startedAt = System.currentTimeMillis();
+                long downloaded = 0L;
                 try (InputStream input = connection.getInputStream();
                      FileOutputStream output = new FileOutputStream(apk)) {
                     int read;
                     while ((read = input.read(buffer)) != -1) {
                         output.write(buffer, 0, read);
+                        downloaded += read;
+                        long finalDownloaded = downloaded;
+                        runOnUiThread(() -> updateDownloadOverlay(overlay, finalDownloaded, totalBytes, startedAt));
                     }
                 }
-                runOnUiThread(() -> installDownloadedUpdate(apk));
+                runOnUiThread(() -> {
+                    dismissDownloadOverlay(overlay);
+                    installDownloadedUpdate(apk);
+                });
             } catch (Exception ex) {
-                runOnUiThread(() -> Toast.makeText(this, "Nao foi possivel baixar a atualizacao.", Toast.LENGTH_LONG).show());
+                runOnUiThread(() -> {
+                    dismissDownloadOverlay(overlay);
+                    Toast.makeText(this, "Nao foi possivel baixar a atualizacao.", Toast.LENGTH_LONG).show();
+                });
             } finally {
                 if (connection != null) {
                     connection.disconnect();
                 }
             }
         }, "nBTChat-apk-download").start();
+    }
+
+    private DownloadOverlay showDownloadOverlay() {
+        FrameLayout shade = new FrameLayout(this);
+        shade.setBackgroundColor(Color.argb(178, 0, 0, 0));
+
+        LinearLayout card = vertical();
+        card.setPadding(dp(18), dp(18), dp(18), dp(18));
+        card.setBackground(rounded(surface(), dp(14), border()));
+
+        TextView title = text("Baixando atualizacao", 18, primary(), Typeface.BOLD);
+        card.addView(title);
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setIndeterminate(true);
+        card.addView(bar, topMargin(dp(14)));
+        TextView detail = text("Preparando download...", 13, secondary(), Typeface.NORMAL);
+        detail.setGravity(Gravity.CENTER);
+        card.addView(detail, topMargin(dp(10)));
+
+        FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(
+                Math.min(getResources().getDisplayMetrics().widthPixels - dp(42), dp(360)),
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+        );
+        shade.addView(card, cardParams);
+
+        PopupWindow popup = new PopupWindow(shade, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, false);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(false);
+        popup.showAtLocation(getWindow().getDecorView(), Gravity.CENTER, 0, 0);
+        return new DownloadOverlay(popup, bar, detail);
+    }
+
+    private void updateDownloadOverlay(DownloadOverlay overlay, long downloaded, int totalBytes, long startedAt) {
+        if (overlay == null || overlay.popup == null || !overlay.popup.isShowing()) {
+            return;
+        }
+        if (totalBytes > 0) {
+            int progress = (int) Math.min(100, Math.max(0, downloaded * 100L / totalBytes));
+            overlay.progress.setIndeterminate(false);
+            overlay.progress.setProgress(progress);
+            long elapsed = Math.max(1L, System.currentTimeMillis() - startedAt);
+            long remaining = downloaded <= 0 ? 0 : ((long) totalBytes - downloaded) * elapsed / downloaded;
+            overlay.detail.setText(progress + "%  " + formatKb(downloaded) + "/" + formatKb(totalBytes) + "  " + formatRemaining(remaining));
+        } else {
+            overlay.progress.setIndeterminate(true);
+            overlay.detail.setText(formatKb(downloaded) + " baixados");
+        }
+    }
+
+    private void dismissDownloadOverlay(DownloadOverlay overlay) {
+        if (overlay != null && overlay.popup != null && overlay.popup.isShowing()) {
+            overlay.popup.dismiss();
+        }
+    }
+
+    private String formatKb(long bytes) {
+        return Math.max(0, bytes / 1024L) + " KB";
+    }
+
+    private String formatRemaining(long millis) {
+        if (millis <= 0) {
+            return "calculando...";
+        }
+        long seconds = Math.max(1L, millis / 1000L);
+        return seconds + "s restantes";
     }
 
     private void installDownloadedUpdate(File apk) {
@@ -7117,6 +7200,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             this.deviceId = deviceId == null ? "" : deviceId;
             this.identityPublicKey = identityPublicKey == null ? "" : identityPublicKey;
             this.fingerprint = fingerprint == null ? "" : fingerprint;
+        }
+    }
+
+    private static final class DownloadOverlay {
+        final PopupWindow popup;
+        final ProgressBar progress;
+        final TextView detail;
+
+        DownloadOverlay(PopupWindow popup, ProgressBar progress, TextView detail) {
+            this.popup = popup;
+            this.progress = progress;
+            this.detail = detail;
         }
     }
 
