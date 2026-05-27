@@ -319,11 +319,13 @@ async function adminPage(request, env) {
     .product-id { margin-top: 4px; color: #64748b; font-size: 12px; font-weight: 800; }
     .add { background: #eefbf3; border-color: #bbf7d0; }
     .hint { font-size: 13px; }
+    .login-id { background: #eef2f0; color: #52606d; }
     @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
     @media (prefers-color-scheme: dark) {
       body { background: #101820; color: #f7f8f5; }
       main { background: #18232c; border-color: #2f3b45; }
       input, textarea { background: #24313b; border-color: #2f3b45; color: #f7f8f5; }
+      .login-id { background: #24313b; color: #cbd5cf; }
       .locked { background: #3a2615; border-color: #9a5a1f; color: #fed7aa; }
       .product { background: #1d2933; border-color: #2f3b45; }
       .add { background: #123328; border-color: #166534; }
@@ -343,8 +345,10 @@ async function adminPage(request, env) {
 function adminLoginForm() {
   return `<div class="locked">Entre com a chave ADM configurada nas variáveis do Worker.</div>
     <form method="post" action="/admin/login">
+      <label>Identificação</label>
+      <input class="login-id" name="username" value="nBTChat ADM" autocomplete="username" readonly>
       <label>Chave ADM</label>
-      <input name="key" type="password" autocomplete="current-password" required>
+      <input name="key" type="password" autocomplete="current-password" required autofocus>
       <button type="submit">Entrar</button>
     </form>`;
 }
