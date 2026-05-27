@@ -265,16 +265,20 @@ public final class StorePaymentClient {
     public static final class ProductConfig {
         public final String id;
         public final String title;
+        public final String kind;
+        public final boolean free;
         public final double price;
         public final double dailyFee;
         public final double power;
         public final int durationDays;
         public final String footer;
 
-        ProductConfig(String id, String title, double price, double dailyFee, double power, int durationDays, String footer) {
+        ProductConfig(String id, String title, String kind, boolean free, double price, double dailyFee, double power, int durationDays, String footer) {
             this.id = id == null ? PRODUCT_CARTELA_EVENTOS : id;
             this.title = title == null || title.trim().isEmpty() ? GadgetStore.TABLE_100_TITLE : title;
-            this.price = price > 0 ? price : 2.49;
+            this.kind = kind == null || kind.trim().isEmpty() ? "item" : kind.trim();
+            this.free = free;
+            this.price = free ? 0 : (price > 0 ? price : 2.49);
             this.dailyFee = Math.max(0, dailyFee);
             this.power = power >= 1 ? power : 1.25;
             this.durationDays = Math.max(1, Math.min(365, durationDays));
@@ -283,11 +287,13 @@ public final class StorePaymentClient {
 
         static ProductConfig fromJson(JSONObject json) {
             if (json == null) {
-                return new ProductConfig(PRODUCT_CARTELA_EVENTOS, GadgetStore.TABLE_100_TITLE, 2.49, 1.25, 1.25, 1, GadgetStore.TABLE_100_FOOTER);
+                return new ProductConfig(PRODUCT_CARTELA_EVENTOS, GadgetStore.TABLE_100_TITLE, "item", false, 2.49, 1.25, 1.25, 1, GadgetStore.TABLE_100_FOOTER);
             }
             return new ProductConfig(
                     json.optString("id", PRODUCT_CARTELA_EVENTOS),
                     json.optString("title", GadgetStore.TABLE_100_TITLE),
+                    json.optString("kind", "item"),
+                    json.optBoolean("free", false),
                     json.optDouble("price", 2.49),
                     json.optDouble("dailyFee", 1.25),
                     json.optDouble("power", 1.25),

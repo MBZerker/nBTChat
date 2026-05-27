@@ -1,9 +1,9 @@
 {
-  "versionCode": 57,
-  "versionName": "0.4.35",
+  "versionCode": 58,
+  "versionName": "0.4.36",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.35.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.36.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Prepara a loja para varios itens no ADM e faz a Cartela de eventos usar valores configurados no servidor."
+  "changelog": "Adiciona Palitinhos como jogo gratuito na loja, remove reserva da Cartela de eventos e melhora identificacao de participantes."
 }

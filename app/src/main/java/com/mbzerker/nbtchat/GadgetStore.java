@@ -13,6 +13,8 @@ public final class GadgetStore {
     public static final String TABLE_100_ID = "table100";
     public static final String TABLE_100_TITLE = "Cartela de eventos";
     public static final String TABLE_100_FOOTER = "Produto destinado exclusivamente para organizacao de eventos familiares, recreativos e chas beneficentes.";
+    public static final String PALITINHOS_ID = "palitinhos";
+    public static final String PALITINHOS_TITLE = "Palitinhos";
     public static final String ACTION_GADGETS_CHANGED = "com.mbzerker.nbtchat.GADGETS_CHANGED";
     public static final String EXTRA_TABLE_ID = "tableId";
     private static final String PREFS = "official_gadgets";
@@ -180,7 +182,7 @@ public final class GadgetStore {
     public Table100Payload table100Payload() {
         String tableId = table100InstanceId();
         return new Table100Payload(tableId, table100CustomTitle(), table100OwnerMessage(), table100CopyText(), table100OwnerContact(),
-                "", lockedNumbers(tableId), table100ReservationsEnabled(), table100ReservationHours());
+                "", lockedNumbers(tableId), false, 0);
     }
 
     public boolean mergeOnlineCartela(StorePaymentClient.CartelaState state) {
@@ -252,15 +254,15 @@ public final class GadgetStore {
             for (int i = 0; i < items.length(); i++) {
                 JSONObject item = items.getJSONObject(i);
                 if (tableId.equals(item.optString("tableId", ""))
-                        && address.equals(item.optString("address", ""))
-                        && number == item.optInt("number", -1)) {
+                        && address.equals(item.optString("address", ""))) {
                     item.put("name", clean(name));
-                    item.put("confirmed", confirmed);
-                    item.put("reserved", reserved && !confirmed);
-                    item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
-                    item.put("removed", removed);
-                    changed = true;
-                    break;
+                    if (number == item.optInt("number", -1)) {
+                        item.put("confirmed", confirmed);
+                        item.put("reserved", reserved && !confirmed);
+                        item.put("reservationExpiresAt", confirmed ? 0L : reservationExpiresAt);
+                        item.put("removed", removed);
+                        changed = true;
+                    }
                 }
             }
             if (!changed) {

@@ -2,11 +2,24 @@
   cartela_de_eventos: {
     id: "cartela_de_eventos",
     title: "Cartela de eventos",
+    kind: "item",
+    free: false,
     price: 2.49,
     dailyFee: 1.25,
     power: 1.25,
     durationDays: 1,
     footer: "Produto destinado exclusivamente para organizacao de eventos familiares, recreativos e chas beneficentes.",
+  },
+  palitinhos: {
+    id: "palitinhos",
+    title: "Palitinhos",
+    kind: "game",
+    free: true,
+    price: 0,
+    dailyFee: 0,
+    power: 1.25,
+    durationDays: 0,
+    footer: "Jogo gratuito para partidas locais entre contatos conectados pelo nBTChat.",
   },
 };
 
@@ -47,7 +60,8 @@ async function getProduct(env, productId) {
 
 function normalizeProduct(product, fallback) {
   const base = fallback || PRODUCTS.cartela_de_eventos;
-  let price = Math.max(0.01, Number(product.price) || base.price);
+  const free = product.free === true || product.free === "on" || product.free === "true";
+  let price = free ? 0 : Math.max(0.01, Number(product.price) || base.price);
   let dailyFee = Math.max(0, Number(product.dailyFee) || base.dailyFee || 0);
   let power = Math.max(1, Number(product.power) || base.power || 1.25);
   let durationDays = clampInt(product.durationDays, base.durationDays, 1, 365);
@@ -60,6 +74,8 @@ function normalizeProduct(product, fallback) {
   return {
     id: clean(product.id || base.id),
     title: clean(product.title || base.title),
+    kind: clean(product.kind || base.kind || "item"),
+    free,
     price,
     dailyFee,
     power,
@@ -320,6 +336,8 @@ async function adminPage(request, env) {
     .add { background: #eefbf3; border-color: #bbf7d0; }
     .hint { font-size: 13px; }
     .login-id { background: #eef2f0; color: #52606d; }
+    .check { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-weight: 800; }
+    .check input { width: auto; margin: 0; }
     @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
     @media (prefers-color-scheme: dark) {
       body { background: #101820; color: #f7f8f5; }
@@ -365,6 +383,8 @@ function adminProductsForm(products) {
     dailyFee: PRODUCTS.cartela_de_eventos.dailyFee,
     power: PRODUCTS.cartela_de_eventos.power,
     durationDays: PRODUCTS.cartela_de_eventos.durationDays,
+    kind: "game",
+    free: true,
     footer: PRODUCTS.cartela_de_eventos.footer,
   }, true);
   return `<p class="hint">Itens salvos aqui aparecem no endpoint da loja e podem ser usados pelo app conforme forem implementados. A Cartela de eventos já usa preço, validade, taxa diária e potencializador vindos daqui.</p>
@@ -381,6 +401,12 @@ function adminProductForm(product, isNew) {
       <input name="id" value="${escapeHtml(product.id)}" required maxlength="60" pattern="[A-Za-z0-9_-]+">
       <label>Nome do item</label>
       <input name="title" value="${escapeHtml(product.title)}" required maxlength="80">
+      <label>Tipo</label>
+      <select name="kind" style="width:100%;box-sizing:border-box;border:1px solid #cbd5cf;border-radius:12px;padding:13px;font-size:16px;margin-top:6px">
+        <option value="item" ${product.kind === "item" ? "selected" : ""}>Item</option>
+        <option value="game" ${product.kind === "game" ? "selected" : ""}>Jogo</option>
+      </select>
+      <label class="check"><input name="free" type="checkbox" ${product.free ? "checked" : ""}> Gratuito</label>
       <div class="grid">
         <div>
           <label>Preço em R$</label>
@@ -417,6 +443,8 @@ async function saveAdminProducts(request, env) {
   products[id] = normalizeProduct({
     id,
     title: data.title,
+    kind: data.kind,
+    free: data.free === "on",
     price: decimalNumber(data.price),
     dailyFee: decimalNumber(data.dailyFee),
     power: decimalNumber(data.power),
@@ -806,8 +834,8 @@ async function registerCartela(request, env) {
     ownerMessage: clean(data.ownerMessage),
     copyText: clean(data.copyText),
     ownerContact: clean(data.ownerContact),
-    allowReservations: !!data.allowReservations,
-    reservationHours: clampInt(data.reservationHours, 24, 1, 168),
+    allowReservations: false,
+    reservationHours: 0,
     expiresAt: active.expiresAt,
     choices: Array.isArray(existing.choices) ? existing.choices : [],
     createdAt: existing.createdAt || Date.now(),
@@ -850,25 +878,26 @@ async function chooseCartelaNumber(request, env) {
   if (taken && taken.chooserDeviceId !== chooserDeviceId) {
     return json({ error: "number_taken", cartela: publicCartela(cartela) }, 409);
   }
+  for (const choice of cartela.choices) {
+    if (choice.chooserDeviceId === chooserDeviceId && chooserName) {
+      choice.chooserName = chooserName;
+    }
+  }
   if (taken) {
     taken.chooserName = chooserName || taken.chooserName || "Contato";
-    taken.reserved = !!data.reserved && !taken.confirmed && !!cartela.allowReservations;
-    taken.reservationExpiresAt = taken.reserved ? Date.now() + clampInt(cartela.reservationHours, 24, 1, 168) * 60 * 60 * 1000 : 0;
+    taken.reserved = false;
+    taken.reservationExpiresAt = 0;
     taken.removed = false;
     taken.updatedAt = Date.now();
   } else {
-    const reserved = !!data.reserved;
-    if (reserved && !cartela.allowReservations) {
-      return json({ error: "reservations_disabled", cartela: publicCartela(cartela) }, 403);
-    }
     cartela.choices.push({
       id: `${chooserDeviceId}:${number}`,
       chooserDeviceId,
       chooserName: chooserName || "Contato",
       number,
       confirmed: false,
-      reserved,
-      reservationExpiresAt: reserved ? Date.now() + clampInt(cartela.reservationHours, 24, 1, 168) * 60 * 60 * 1000 : 0,
+      reserved: false,
+      reservationExpiresAt: 0,
       removed: false,
       createdAt: Date.now(),
       updatedAt: Date.now(),
