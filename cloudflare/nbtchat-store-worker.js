@@ -1085,13 +1085,8 @@ function publicCartela(cartela) {
 }
 
 function cleanupExpiredChoices(cartela) {
-  const now = Date.now();
   return (Array.isArray(cartela.choices) ? cartela.choices : []).filter((choice) => {
-    if (!choice || choice.confirmed || !choice.reserved) {
-      return true;
-    }
-    const expiresAt = Number(choice.reservationExpiresAt) || 0;
-    return !expiresAt || expiresAt > now;
+    return !!choice;
   });
 }
 

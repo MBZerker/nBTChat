@@ -269,6 +269,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private int palitinhosTurn = -1;
     private int palitinhosGuess = 0;
     private final int[] palitinhosHands = new int[]{0, 0, 0, 0, 0, 0};
+    private final int[] palitinhosGuesses = new int[]{-1, -1, -1, -1, -1, -1};
+    private final boolean[] palitinhosReady = new boolean[]{false, false, false, false, false, false};
+    private final boolean[] palitinhosConfirmed = new boolean[]{false, false, false, false, false, false};
+    private final boolean[] palitinhosSpectator = new boolean[]{false, false, false, false, false, false};
+    private int palitinhosRoundPhase = 1;
+    private int palitinhosCountdown = 0;
+    private int palitinhosRevealCount = 0;
+    private int palitinhosHandTimeSeconds = 15;
+    private String palitinhosChatDraft = "";
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -455,7 +464,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             leaveChatToHome();
         } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen) || "share_targets".equals(currentScreen) || "mesh_diag".equals(currentScreen)) {
             showHomeScreen();
-        } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen) || "cartela_purchase".equals(currentScreen) || "palitinhos".equals(currentScreen)) {
+        } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen) || "cartela_purchase".equals(currentScreen)
+                || "palitinhos".equals(currentScreen) || "palitinhos_lobby".equals(currentScreen) || "palitinhos_config".equals(currentScreen)) {
             showStoreScreen();
         } else if ("store".equals(currentScreen)) {
             showUpdatesScreen();
@@ -1171,6 +1181,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         attachTopLevelSwipe(root);
         setContentView(root);
         requestInsets(root);
+        schedulePalitinhosAutoAdvance();
+    }
+
+    private void schedulePalitinhosAutoAdvance() {
+        if (!"palitinhos".equals(currentScreen) || palitinhosRoundPhase != 3) {
+            return;
+        }
+        uiHandler.postDelayed(() -> {
+            if ("palitinhos".equals(currentScreen) && palitinhosRoundPhase == 3) {
+                advancePalitinhosReveal();
+            }
+        }, palitinhosCountdown > 0 ? 1000L : (palitinhosRevealCount < palitinhosPlayers ? 700L : 3000L));
     }
 
     private ImageButton navButton(int drawableId, String description, boolean active, View.OnClickListener listener) {
@@ -2904,17 +2926,185 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         item.addView(header);
 
         Button open = pillButton("Abrir jogo", "#16A34A", "#FFFFFF");
-        open.setOnClickListener(v -> showPalitinhosScreen());
+        open.setOnClickListener(v -> showPalitinhosConfigScreen());
         item.addView(open, topMargin(dp(12)));
-        item.setOnClickListener(v -> showPalitinhosScreen());
+        item.setOnClickListener(v -> showPalitinhosConfigScreen());
         return item;
+    }
+
+    private void showPalitinhosConfigScreen() {
+        currentScreen = "palitinhos_config";
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
+        scrollView.addView(root, matchWrap());
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showStoreScreen()));
+        TextView title = text("Configurar Palitinhos", 24, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        addTopActions(top);
+        root.addView(top);
+
+        root.addView(text("Defina a mesa antes de chamar os contatos. O convite permanece no lobby.", 14, secondary(), Typeface.NORMAL), topMargin(dp(12)));
+        root.addView(label("Tempo para escolher palitos"));
+        LinearLayout timeRow = horizontal();
+        timeRow.setGravity(Gravity.CENTER_VERTICAL);
+        timeRow.addView(iconButton(R.drawable.ic_minus_24, "Menos tempo", dp(42), v -> {
+            palitinhosHandTimeSeconds = Math.max(5, palitinhosHandTimeSeconds - 5);
+            showPalitinhosConfigScreen();
+        }));
+        TextView seconds = text(palitinhosHandTimeSeconds + " segundos", 16, primary(), Typeface.BOLD);
+        seconds.setGravity(Gravity.CENTER);
+        timeRow.addView(seconds, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        timeRow.addView(iconButton(R.drawable.ic_add_24, "Mais tempo", dp(42), v -> {
+            palitinhosHandTimeSeconds = Math.min(60, palitinhosHandTimeSeconds + 5);
+            showPalitinhosConfigScreen();
+        }));
+        root.addView(timeRow, topMargin(dp(8)));
+
+        root.addView(label("Skins"));
+        TextView skins = text("Padrao: maos classicas, palitos de madeira, HUD escuro. A loja de skins sera conectada aqui.", 13, secondary(), Typeface.NORMAL);
+        skins.setPadding(dp(12), dp(10), dp(12), dp(10));
+        skins.setBackground(rounded(surfaceAlt(), dp(12), border()));
+        root.addView(skins, topMargin(dp(6)));
+
+        Button invite = pillButton("Convidar contatos", surfaceAlt(), primary());
+        invite.setOnClickListener(v -> Toast.makeText(this, "Convite em massa Bluetooth sera ligado ao estado da partida na proxima etapa.", Toast.LENGTH_LONG).show());
+        root.addView(invite, topMargin(dp(14)));
+        Button lobby = pillButton("Ir para o lobby", "#16A34A", "#FFFFFF");
+        lobby.setOnClickListener(v -> {
+            resetPalitinhosLobby();
+            showPalitinhosLobbyScreen();
+        });
+        root.addView(lobby, topMargin(dp(10)));
+
+        setContentView(scrollView);
+        requestInsets(root);
+    }
+
+    private void resetPalitinhosLobby() {
+        for (int i = 0; i < 6; i++) {
+            palitinhosReady[i] = i == 0;
+            palitinhosConfirmed[i] = false;
+            palitinhosSpectator[i] = false;
+            palitinhosHands[i] = 0;
+            palitinhosGuesses[i] = -1;
+        }
+        palitinhosRoundPhase = 1;
+        palitinhosCountdown = 0;
+        palitinhosRevealCount = 0;
+        palitinhosTurn = -1;
+    }
+
+    private void showPalitinhosLobbyScreen() {
+        currentScreen = "palitinhos_lobby";
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color("#0B1512"));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
+        scrollView.addView(root, matchWrap());
+
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showPalitinhosConfigScreen()));
+        TextView title = text("Lobby Palitinhos", 25, "#F8FAFC", Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        root.addView(top);
+
+        root.addView(text("Aguardando jogadores. Quando todos estiverem prontos, a partida comeca.", 14, "#CBD5E1", Typeface.NORMAL), topMargin(dp(12)));
+        LinearLayout controls = horizontal();
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+        controls.addView(iconButton(R.drawable.ic_minus_24, "Menos jogadores", dp(42), v -> {
+            palitinhosPlayers = Math.max(2, palitinhosPlayers - 1);
+            showPalitinhosLobbyScreen();
+        }));
+        TextView count = text(palitinhosPlayers + " jogadores", 17, "#F8FAFC", Typeface.BOLD);
+        count.setGravity(Gravity.CENTER);
+        controls.addView(count, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        controls.addView(iconButton(R.drawable.ic_add_24, "Mais jogadores", dp(42), v -> {
+            palitinhosPlayers = Math.min(6, palitinhosPlayers + 1);
+            showPalitinhosLobbyScreen();
+        }));
+        root.addView(controls, topMargin(dp(16)));
+
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            root.addView(palitinhosLobbyPlayerRow(i), topMargin(dp(8)));
+        }
+
+        Button ready = pillButton(palitinhosReady[0] ? "Nao estou pronto" : "Pronto", palitinhosReady[0] ? surfaceAlt() : "#16A34A", palitinhosReady[0] ? primary() : "#FFFFFF");
+        ready.setOnClickListener(v -> {
+            palitinhosReady[0] = !palitinhosReady[0];
+            showPalitinhosLobbyScreen();
+        });
+        root.addView(ready, topMargin(dp(16)));
+        Button start = pillButton("Comecar partida", allPalitinhosReady() ? "#16A34A" : "#64748B", "#FFFFFF");
+        start.setOnClickListener(v -> {
+            if (!allPalitinhosReady()) {
+                Toast.makeText(this, "Aguarde todos ficarem prontos.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            startPalitinhosRound(true);
+        });
+        root.addView(start, topMargin(dp(8)));
+
+        setContentView(scrollView);
+        requestInsets(root);
+    }
+
+    private View palitinhosLobbyPlayerRow(int index) {
+        LinearLayout row = horizontal();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setBackground(rounded("#182420", dp(12), palitinhosReady[index] ? "#16A34A" : "#334155"));
+        row.addView(text("Jogador " + (index + 1), 16, "#F8FAFC", Typeface.BOLD), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(text(palitinhosReady[index] ? "Pronto" : "Aguardando", 13, palitinhosReady[index] ? "#BBF7D0" : "#CBD5E1", Typeface.BOLD));
+        if (index != 0) {
+            row.setOnClickListener(v -> {
+                palitinhosReady[index] = !palitinhosReady[index];
+                showPalitinhosLobbyScreen();
+            });
+        }
+        return row;
+    }
+
+    private boolean allPalitinhosReady() {
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (!palitinhosReady[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void startPalitinhosRound(boolean firstRound) {
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            palitinhosHands[i] = 0;
+            palitinhosConfirmed[i] = palitinhosSpectator[i];
+            palitinhosGuesses[i] = -1;
+        }
+        palitinhosRoundPhase = 1;
+        palitinhosRevealCount = 0;
+        palitinhosCountdown = 0;
+        if (firstRound || palitinhosTurn < 0) {
+            palitinhosTurn = new Random().nextInt(Math.max(1, activePalitinhosPlayers()));
+        } else {
+            palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
+        }
+        showPalitinhosScreen();
     }
 
     private void showPalitinhosScreen() {
         currentScreen = "palitinhos";
         messageList = null;
-        if (palitinhosTurn < 0 || palitinhosTurn >= palitinhosPlayers) {
-            palitinhosTurn = new Random().nextInt(Math.max(1, palitinhosPlayers));
+        if (palitinhosTurn < 0 || palitinhosTurn >= palitinhosPlayers || palitinhosSpectator[palitinhosTurn]) {
+            palitinhosTurn = nextActivePalitinhosIndex(-1);
         }
 
         FrameLayout root = new FrameLayout(this);
@@ -2937,38 +3127,26 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         LinearLayout hud = vertical();
         hud.setGravity(Gravity.CENTER);
-        TextView turn = text("Vez: Jogador " + (palitinhosTurn + 1), 18, "#BBF7D0", Typeface.BOLD);
+        TextView turn = text(palitinhosPhaseTitle(), 18, "#BBF7D0", Typeface.BOLD);
         hud.addView(turn);
-        TextView hint = text("Escolha 0 a 3 palitos e tente adivinhar a soma.", 13, "#CBD5E1", Typeface.NORMAL);
+        TextView hint = text(palitinhosPhaseHint(), 13, "#CBD5E1", Typeface.NORMAL);
         hint.setGravity(Gravity.CENTER);
         hud.addView(hint, topMargin(dp(4)));
-        LinearLayout players = horizontal();
-        players.setGravity(Gravity.CENTER);
-        players.addView(iconButton(R.drawable.ic_minus_24, "Menos jogadores", dp(42), v -> {
-            palitinhosPlayers = Math.max(2, palitinhosPlayers - 1);
-            if (palitinhosTurn >= palitinhosPlayers) {
-                palitinhosTurn = 0;
-            }
-            showPalitinhosScreen();
-        }));
-        TextView count = text(palitinhosPlayers + " jogadores", 15, "#F8FAFC", Typeface.BOLD);
-        count.setGravity(Gravity.CENTER);
-        players.addView(count, new LinearLayout.LayoutParams(dp(130), LinearLayout.LayoutParams.WRAP_CONTENT));
-        players.addView(iconButton(R.drawable.ic_add_24, "Mais jogadores", dp(42), v -> {
-            palitinhosPlayers = Math.min(6, palitinhosPlayers + 1);
-            showPalitinhosScreen();
-        }));
-        hud.addView(players, topMargin(dp(10)));
+        if (palitinhosRoundPhase == 3 && palitinhosCountdown > 0) {
+            TextView countdown = text(String.valueOf(palitinhosCountdown), 88, "#FACC15", Typeface.BOLD);
+            countdown.setGravity(Gravity.CENTER);
+            hud.addView(countdown, topMargin(dp(8)));
+        }
         FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         root.addView(hud, hudParams);
 
         int[][] gravities = new int[][]{
-                {Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, -36},
-                {Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, -46, 0, 0},
-                {Gravity.CENTER_VERTICAL | Gravity.LEFT, -50, 0, 0, 0},
-                {Gravity.CENTER_VERTICAL | Gravity.RIGHT, 0, 0, -50, 0},
-                {Gravity.TOP | Gravity.LEFT, -42, 70, 0, 0},
-                {Gravity.TOP | Gravity.RIGHT, 0, 70, -42, 0},
+                {Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, -86, 0},
+                {Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, -98, 0, 0, 180},
+                {Gravity.CENTER_VERTICAL | Gravity.LEFT, -96, 0, 0, 0, 90},
+                {Gravity.CENTER_VERTICAL | Gravity.RIGHT, 0, 0, -96, 0, -90},
+                {Gravity.TOP | Gravity.LEFT, -88, 42, 0, 0, 135},
+                {Gravity.TOP | Gravity.RIGHT, 0, 42, -88, 0, -135},
         };
         for (int i = 0; i < palitinhosPlayers; i++) {
             root.addView(palitinhosHandView(i), handPosition(gravities[i]));
@@ -2981,21 +3159,39 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         bottom.addView(mine);
         LinearLayout controls = horizontal();
         controls.setGravity(Gravity.CENTER_VERTICAL);
-        controls.addView(iconButton(R.drawable.ic_minus_24, "Menos palitos", dp(42), v -> {
-            palitinhosHands[0] = Math.max(0, palitinhosHands[0] - 1);
-            showPalitinhosScreen();
-        }));
-        controls.addView(iconButton(R.drawable.ic_add_24, "Mais palitos", dp(42), v -> {
-            palitinhosHands[0] = Math.min(3, palitinhosHands[0] + 1);
-            showPalitinhosScreen();
-        }));
-        Button guess = pillButton("Palpite " + palitinhosGuess, "#2563EB", "#FFFFFF");
-        guess.setOnClickListener(v -> showPalitinhosGuessDialog());
-        LinearLayout.LayoutParams guessParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
-        guessParams.setMargins(dp(8), 0, 0, 0);
-        controls.addView(guess, guessParams);
+        if (palitinhosRoundPhase == 1 && !palitinhosConfirmed[0]) {
+            controls.addView(iconButton(R.drawable.ic_minus_24, "Menos palitos", dp(42), v -> {
+                palitinhosHands[0] = Math.max(0, palitinhosHands[0] - 1);
+                showPalitinhosScreen();
+            }));
+            controls.addView(iconButton(R.drawable.ic_add_24, "Mais palitos", dp(42), v -> {
+                palitinhosHands[0] = Math.min(3, palitinhosHands[0] + 1);
+                showPalitinhosScreen();
+            }));
+            Button confirm = pillButton("Confirmar mao", "#16A34A", "#FFFFFF");
+            confirm.setOnClickListener(v -> {
+                palitinhosConfirmed[0] = true;
+                simulatePalitinhosHandsIfNeeded();
+                if (allPalitinhosHandsConfirmed()) {
+                    palitinhosRoundPhase = 2;
+                }
+                showPalitinhosScreen();
+            });
+            LinearLayout.LayoutParams confirmParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+            confirmParams.setMargins(dp(8), 0, 0, 0);
+            controls.addView(confirm, confirmParams);
+        } else if (palitinhosRoundPhase == 2) {
+            Button guess = pillButton("Dar palpite", "#2563EB", "#FFFFFF");
+            guess.setOnClickListener(v -> showPalitinhosGuessDialog());
+            controls.addView(guess, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        } else {
+            Button next = pillButton(palitinhosRoundPhase == 3 ? "Revelar / continuar" : "Nova rodada", "#16A34A", "#FFFFFF");
+            next.setOnClickListener(v -> advancePalitinhosReveal());
+            controls.addView(next, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        }
         bottom.addView(controls, topMargin(dp(8)));
-        TextView bt = text("Multiplayer Bluetooth preparado para contatos nBTChat; sincronizacao da mesa entra na proxima etapa.", 11, "#94A3B8", Typeface.NORMAL);
+        TextView bt = text("💬 Chat da partida: toque aqui para abrir as mensagens da mesa.", 11, "#94A3B8", Typeface.NORMAL);
+        bt.setOnClickListener(v -> showPalitinhosChatDialog());
         bt.setGravity(Gravity.CENTER);
         bottom.addView(bt, topMargin(dp(6)));
         FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
@@ -3006,23 +3202,65 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private FrameLayout.LayoutParams handPosition(int[] spec) {
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(132), dp(168), spec[0]);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(198), dp(252), spec[0]);
         params.setMargins(dp(spec[1]), dp(spec[2]), dp(spec[3]), dp(spec[4]));
         return params;
     }
 
     private View palitinhosHandView(int index) {
-        LinearLayout wrap = vertical();
-        wrap.setGravity(Gravity.CENTER);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setAlpha(palitinhosSpectator[index] ? 0.42f : 1f);
+        LinearLayout stack = vertical();
+        stack.setGravity(Gravity.CENTER);
         ImageView hand = new ImageView(this);
-        hand.setImageResource(palitinhosHands[index] > 0 ? R.drawable.palitinhos_hand_fist : R.drawable.palitinhos_hand_open);
+        boolean revealed = palitinhosRoundPhase == 3 && index < palitinhosRevealCount;
+        hand.setImageResource(revealed ? R.drawable.palitinhos_hand_open : R.drawable.palitinhos_hand_fist);
         hand.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        wrap.addView(hand, new LinearLayout.LayoutParams(dp(118), dp(132)));
-        TextView name = text("J" + (index + 1) + "  " + (index == 0 ? palitinhosHands[index] : "?"), 13,
+        hand.setRotation(palitinhosHandRotation(index));
+        stack.addView(hand, new LinearLayout.LayoutParams(dp(178), dp(198)));
+        TextView name = text("J" + (index + 1) + "  " + palitinhosPlayerStatus(index), 13,
                 index == palitinhosTurn ? "#BBF7D0" : "#E2E8F0", Typeface.BOLD);
         name.setGravity(Gravity.CENTER);
-        wrap.addView(name);
+        stack.addView(name);
+        wrap.addView(stack, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        if (revealed && palitinhosHands[index] > 0) {
+            ImageView sticks = new ImageView(this);
+            sticks.setImageResource(R.drawable.palitinhos_sticks);
+            sticks.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            FrameLayout.LayoutParams stickParams = new FrameLayout.LayoutParams(dp(80), dp(80), Gravity.CENTER);
+            wrap.addView(sticks, stickParams);
+        }
         return wrap;
+    }
+
+    private float palitinhosHandRotation(int index) {
+        switch (index) {
+            case 1:
+                return 180f;
+            case 2:
+                return 90f;
+            case 3:
+                return -90f;
+            case 4:
+                return 135f;
+            case 5:
+                return -135f;
+            default:
+                return 0f;
+        }
+    }
+
+    private String palitinhosPlayerStatus(int index) {
+        if (palitinhosSpectator[index]) {
+            return "fora";
+        }
+        if (palitinhosRoundPhase == 1) {
+            return palitinhosConfirmed[index] ? "ok" : "...";
+        }
+        if (palitinhosRoundPhase == 2) {
+            return palitinhosGuesses[index] >= 0 ? String.valueOf(palitinhosGuesses[index]) : "?";
+        }
+        return index < palitinhosRevealCount ? String.valueOf(palitinhosHands[index]) : "?";
     }
 
     private void showPalitinhosGuessDialog() {
@@ -3034,16 +3272,171 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setTitle("Palpite da soma")
                 .setItems(values, (dialog, which) -> {
                     palitinhosGuess = which;
-                    int total = 0;
-                    for (int i = 0; i < palitinhosPlayers; i++) {
-                        total += palitinhosHands[i];
+                    palitinhosGuesses[palitinhosTurn] = which;
+                    if (allPalitinhosGuessed()) {
+                        palitinhosRoundPhase = 3;
+                        palitinhosCountdown = 3;
+                        palitinhosRevealCount = 0;
+                    } else {
+                        palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
                     }
-                    Toast.makeText(this, which == total
-                            ? "Acertou! Soma: " + total
-                            : "Palpite registrado. Soma atual local: " + total, Toast.LENGTH_LONG).show();
-                    palitinhosTurn = (palitinhosTurn + 1) % palitinhosPlayers;
                     showPalitinhosScreen();
                 })
+                .show();
+    }
+
+    private String palitinhosPhaseTitle() {
+        if (palitinhosRoundPhase == 1) {
+            return "Fase 1: escolha dos palitos";
+        }
+        if (palitinhosRoundPhase == 2) {
+            return "Palpite: Jogador " + (palitinhosTurn + 1);
+        }
+        if (palitinhosCountdown > 0) {
+            return "Revelando em...";
+        }
+        if (palitinhosRevealCount < palitinhosPlayers) {
+            return "Abrindo maos";
+        }
+        return palitinhosWinnersText();
+    }
+
+    private String palitinhosPhaseHint() {
+        if (palitinhosRoundPhase == 1) {
+            return "Tempo do host: " + palitinhosHandTimeSeconds + "s. Depois de confirmar, nao troca ate a proxima rodada.";
+        }
+        if (palitinhosRoundPhase == 2) {
+            return "Todos permanecem com a mao fechada ate o ultimo palpite.";
+        }
+        return "Depois da contagem, as maos abrem no sentido horario.";
+    }
+
+    private int activePalitinhosPlayers() {
+        int count = 0;
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (!palitinhosSpectator[i]) {
+                count++;
+            }
+        }
+        return Math.max(1, count);
+    }
+
+    private int nextActivePalitinhosIndex(int from) {
+        int start = Math.max(-1, from);
+        for (int step = 1; step <= palitinhosPlayers; step++) {
+            int candidate = (start + step + palitinhosPlayers) % palitinhosPlayers;
+            if (!palitinhosSpectator[candidate]) {
+                return candidate;
+            }
+        }
+        return 0;
+    }
+
+    private boolean allPalitinhosHandsConfirmed() {
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (!palitinhosSpectator[i] && !palitinhosConfirmed[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean allPalitinhosGuessed() {
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (!palitinhosSpectator[i] && palitinhosGuesses[i] < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void simulatePalitinhosHandsIfNeeded() {
+        Random random = new Random();
+        for (int i = 1; i < palitinhosPlayers; i++) {
+            if (!palitinhosSpectator[i] && !palitinhosConfirmed[i]) {
+                palitinhosHands[i] = random.nextInt(4);
+                palitinhosConfirmed[i] = true;
+            }
+        }
+    }
+
+    private int palitinhosTotal() {
+        int total = 0;
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (!palitinhosSpectator[i]) {
+                total += palitinhosHands[i];
+            }
+        }
+        return total;
+    }
+
+    private String palitinhosWinnersText() {
+        int total = palitinhosTotal();
+        ArrayList<Integer> winners = new ArrayList<>();
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (!palitinhosSpectator[i] && palitinhosGuesses[i] == total) {
+                winners.add(i + 1);
+            }
+        }
+        if (winners.isEmpty()) {
+            return "Ninguem acertou. Total: " + total;
+        }
+        return "Acertou: J" + TextUtils.join(", J", winners) + "  Total: " + total;
+    }
+
+    private void advancePalitinhosReveal() {
+        if (palitinhosRoundPhase != 3) {
+            startPalitinhosRound(false);
+            return;
+        }
+        if (palitinhosCountdown > 0) {
+            palitinhosCountdown--;
+            showPalitinhosScreen();
+            return;
+        }
+        if (palitinhosRevealCount < palitinhosPlayers) {
+            palitinhosRevealCount++;
+            showPalitinhosScreen();
+            return;
+        }
+        markPalitinhosRoundWinnersOut();
+        startPalitinhosRound(false);
+    }
+
+    private void markPalitinhosRoundWinnersOut() {
+        int total = palitinhosTotal();
+        int activeBefore = activePalitinhosPlayers();
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (!palitinhosSpectator[i] && palitinhosGuesses[i] == total) {
+                palitinhosSpectator[i] = true;
+            }
+        }
+        if (activeBefore <= 2) {
+            for (int i = 0; i < palitinhosPlayers; i++) {
+                if (!palitinhosSpectator[i] && palitinhosGuesses[i] != total) {
+                    palitinhosSpectator[i] = true;
+                    Toast.makeText(this, "Jogador " + (i + 1) + " eliminado. Continua como espectador.", Toast.LENGTH_LONG).show();
+                    break;
+                }
+            }
+        }
+    }
+
+    private void showPalitinhosChatDialog() {
+        EditText input = input("Mensagem da partida");
+        input.setSingleLine(false);
+        input.setMinLines(3);
+        input.setMaxLines(5);
+        input.setText(palitinhosChatDraft);
+        new AlertDialog.Builder(this)
+                .setTitle("Chat da partida")
+                .setView(input)
+                .setPositiveButton("Enviar", (dialog, which) -> {
+                    palitinhosChatDraft = input.getText().toString();
+                    Toast.makeText(this, "Chat local salvo. Envio Bluetooth entra junto da sincronizacao da mesa.", Toast.LENGTH_LONG).show();
+                    showPalitinhosScreen();
+                })
+                .setNegativeButton("Fechar", null)
                 .show();
     }
 
@@ -6713,6 +7106,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             refreshTable100PlayScreen();
         } else if ("palitinhos".equals(currentScreen)) {
             showPalitinhosScreen();
+        } else if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
+        } else if ("palitinhos_config".equals(currentScreen)) {
+            showPalitinhosConfigScreen();
         } else {
             showInitialScreen();
         }

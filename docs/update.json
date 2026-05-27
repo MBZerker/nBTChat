@@ -1,9 +1,9 @@
 {
-  "versionCode": 58,
-  "versionName": "0.4.36",
+  "versionCode": 59,
+  "versionName": "0.4.37",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.36.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.37.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Adiciona Palitinhos como jogo gratuito na loja, remove reserva da Cartela de eventos e melhora identificacao de participantes."
+  "changelog": "Corrige escolhas da Cartela que sumiam e evolui Palitinhos com lobby, fases, palitos e maos orientadas para o centro."
 }
