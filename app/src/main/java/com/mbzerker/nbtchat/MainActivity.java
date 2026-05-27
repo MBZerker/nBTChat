@@ -278,6 +278,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private int palitinhosRevealCount = 0;
     private int palitinhosHandTimeSeconds = 15;
     private String palitinhosChatDraft = "";
+    private final ArrayList<String> palitinhosInvitees = new ArrayList<>();
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -464,8 +465,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             leaveChatToHome();
         } else if ("scanner".equals(currentScreen) || "settings".equals(currentScreen) || "updates".equals(currentScreen) || "share_targets".equals(currentScreen) || "mesh_diag".equals(currentScreen)) {
             showHomeScreen();
+        } else if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
         } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen) || "cartela_purchase".equals(currentScreen)
-                || "palitinhos".equals(currentScreen) || "palitinhos_lobby".equals(currentScreen) || "palitinhos_config".equals(currentScreen)) {
+                || "palitinhos".equals(currentScreen) || "palitinhos_lobby".equals(currentScreen)
+                || "palitinhos_config".equals(currentScreen)) {
             showStoreScreen();
         } else if ("store".equals(currentScreen)) {
             showUpdatesScreen();
@@ -2968,26 +2972,46 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         root.addView(timeRow, topMargin(dp(8)));
 
         root.addView(label("Skins"));
-        TextView skins = text("Padrao: maos classicas, palitos de madeira, HUD escuro. A loja de skins sera conectada aqui.", 13, secondary(), Typeface.NORMAL);
-        skins.setPadding(dp(12), dp(10), dp(12), dp(10));
-        skins.setBackground(rounded(surfaceAlt(), dp(12), border()));
-        root.addView(skins, topMargin(dp(6)));
+        LinearLayout skins = horizontal();
+        skins.setGravity(Gravity.CENTER_VERTICAL);
+        skins.addView(palitinhosSkinSlot("Mao", R.drawable.palitinhos_hand_open, true), new LinearLayout.LayoutParams(0, dp(118), 1));
+        LinearLayout.LayoutParams skinGap = new LinearLayout.LayoutParams(0, dp(118), 1);
+        skinGap.setMargins(dp(8), 0, 0, 0);
+        skins.addView(palitinhosSkinSlot("Palitos", R.drawable.palitinhos_sticks, true), skinGap);
+        LinearLayout.LayoutParams gloveGap = new LinearLayout.LayoutParams(0, dp(118), 1);
+        gloveGap.setMargins(dp(8), 0, 0, 0);
+        skins.addView(palitinhosSkinSlot("Luva", R.drawable.palitinhos_hand_open, false), gloveGap);
+        root.addView(skins, topMargin(dp(8)));
 
-        Button invite = pillButton("Convidar contatos", surfaceAlt(), primary());
-        invite.setOnClickListener(v -> Toast.makeText(this, "Convite em massa Bluetooth sera ligado ao estado da partida na proxima etapa.", Toast.LENGTH_LONG).show());
-        root.addView(invite, topMargin(dp(14)));
-        Button lobby = pillButton("Ir para o lobby", "#16A34A", "#FFFFFF");
+        Button lobby = pillButton("Iniciar", "#16A34A", "#FFFFFF");
         lobby.setOnClickListener(v -> {
             resetPalitinhosLobby();
             showPalitinhosLobbyScreen();
         });
-        root.addView(lobby, topMargin(dp(10)));
+        root.addView(lobby, topMargin(dp(16)));
 
         setContentView(scrollView);
         requestInsets(root);
     }
 
+    private View palitinhosSkinSlot(String title, int drawableId, boolean active) {
+        LinearLayout slot = vertical();
+        slot.setGravity(Gravity.CENTER);
+        slot.setPadding(dp(8), dp(8), dp(8), dp(8));
+        slot.setBackground(rounded(active ? surfaceAlt() : (darkMode ? "#1B222B" : "#E5E7EB"), dp(14), active ? "#16A34A" : border()));
+        ImageView image = new ImageView(this);
+        image.setImageResource(drawableId);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setAlpha(active ? 1f : 0.28f);
+        slot.addView(image, new LinearLayout.LayoutParams(dp(68), 0, 1));
+        TextView label = text(title, 12, active ? primary() : secondary(), Typeface.BOLD);
+        label.setGravity(Gravity.CENTER);
+        slot.addView(label);
+        return slot;
+    }
+
     private void resetPalitinhosLobby() {
+        palitinhosInvitees.clear();
         for (int i = 0; i < 6; i++) {
             palitinhosReady[i] = i == 0;
             palitinhosConfirmed[i] = false;
@@ -3004,6 +3028,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showPalitinhosLobbyScreen() {
         currentScreen = "palitinhos_lobby";
         ScrollView scrollView = new ScrollView(this);
+        scrollView.setBackgroundColor(color("#0B1512"));
         LinearLayout root = vertical();
         root.setBackgroundColor(color("#0B1512"));
         applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
@@ -3034,6 +3059,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }));
         root.addView(controls, topMargin(dp(16)));
 
+        Button invite = pillButton("Convidar", surfaceAlt(), primary());
+        invite.setOnClickListener(v -> showPalitinhosInviteScreen());
+        root.addView(invite, topMargin(dp(10)));
+
         for (int i = 0; i < palitinhosPlayers; i++) {
             root.addView(palitinhosLobbyPlayerRow(i), topMargin(dp(8)));
         }
@@ -3063,14 +3092,73 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
         row.setBackground(rounded("#182420", dp(12), palitinhosReady[index] ? "#16A34A" : "#334155"));
-        row.addView(text("Jogador " + (index + 1), 16, "#F8FAFC", Typeface.BOLD), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(text(palitinhosPlayerName(index), 16, "#F8FAFC", Typeface.BOLD), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         row.addView(text(palitinhosReady[index] ? "Pronto" : "Aguardando", 13, palitinhosReady[index] ? "#BBF7D0" : "#CBD5E1", Typeface.BOLD));
-        if (index != 0) {
-            row.setOnClickListener(v -> {
-                palitinhosReady[index] = !palitinhosReady[index];
-                showPalitinhosLobbyScreen();
-            });
+        return row;
+    }
+
+    private void showPalitinhosInviteScreen() {
+        currentScreen = "palitinhos_invite";
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout root = vertical();
+        root.setBackgroundColor(color(background()));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
+        scrollView.addView(root, matchWrap());
+        LinearLayout top = horizontal();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showPalitinhosLobbyScreen()));
+        TextView title = text("Convidar jogadores", 24, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        titleParams.setMargins(dp(12), 0, 0, 0);
+        top.addView(title, titleParams);
+        top.addView(iconButton(R.drawable.ic_send_24, "Concluir", dp(42), v -> {
+            int invited = Math.min(palitinhosInvitees.size(), Math.max(0, palitinhosPlayers - 1));
+            for (int i = 1; i < palitinhosPlayers; i++) {
+                palitinhosReady[i] = false;
+            }
+            Toast.makeText(this, invited + " convite(s) preparado(s).", Toast.LENGTH_SHORT).show();
+            showPalitinhosLobbyScreen();
+        }));
+        root.addView(top);
+        root.addView(text("Selecione ate " + Math.max(0, palitinhosPlayers - 1) + " contato(s).", 14, secondary(), Typeface.NORMAL), topMargin(dp(12)));
+        Map<String, UserProfile> contacts = profileStore.loadContacts();
+        if (contacts.isEmpty()) {
+            root.addView(text("Nenhum contato pareado para convidar.", 14, secondary(), Typeface.BOLD), topMargin(dp(18)));
+        } else {
+            for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
+                root.addView(palitinhosInviteRow(entry.getKey(), entry.getValue()), topMargin(dp(8)));
+            }
         }
+        setContentView(scrollView);
+        requestInsets(root);
+    }
+
+    private View palitinhosInviteRow(String address, UserProfile profile) {
+        String name = profile.isComplete() ? profile.getDisplayName() : safeName(address, "Contato");
+        boolean selected = palitinhosInvitees.contains(address);
+        LinearLayout row = horizontal();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setBackground(rounded(surface(), dp(12), selected ? "#16A34A" : border()));
+        ImageView avatar = new ImageView(this);
+        applyAvatar(avatar, profile);
+        row.addView(avatar, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        TextView label = text(name, 16, primary(), Typeface.BOLD);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        labelParams.setMargins(dp(12), 0, 0, 0);
+        row.addView(label, labelParams);
+        row.addView(text(selected ? "Selecionado" : "Convidar", 13, selected ? "#16A34A" : secondary(), Typeface.BOLD));
+        row.setOnClickListener(v -> {
+            int limit = Math.max(0, palitinhosPlayers - 1);
+            if (palitinhosInvitees.contains(address)) {
+                palitinhosInvitees.remove(address);
+            } else if (palitinhosInvitees.size() < limit) {
+                palitinhosInvitees.add(address);
+            } else {
+                Toast.makeText(this, "Limite de jogadores atingido.", Toast.LENGTH_SHORT).show();
+            }
+            showPalitinhosInviteScreen();
+        });
         return row;
     }
 
@@ -3141,12 +3229,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         root.addView(hud, hudParams);
 
         int[][] gravities = new int[][]{
-                {Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, -86, 0},
-                {Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, -98, 0, 0, 180},
-                {Gravity.CENTER_VERTICAL | Gravity.LEFT, -96, 0, 0, 0, 90},
-                {Gravity.CENTER_VERTICAL | Gravity.RIGHT, 0, 0, -96, 0, -90},
-                {Gravity.TOP | Gravity.LEFT, -88, 42, 0, 0, 135},
-                {Gravity.TOP | Gravity.RIGHT, 0, 42, -88, 0, -135},
+                {Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, -40, 0},
+                {Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, -70, 0, 0, 180},
+                {Gravity.CENTER_VERTICAL | Gravity.LEFT, -74, 0, 0, 0, 90},
+                {Gravity.CENTER_VERTICAL | Gravity.RIGHT, 0, 0, -74, 0, -90},
+                {Gravity.TOP | Gravity.LEFT, -64, 48, 0, 0, 90},
+                {Gravity.TOP | Gravity.RIGHT, 0, 48, -64, 0, -90},
         };
         for (int i = 0; i < palitinhosPlayers; i++) {
             root.addView(palitinhosHandView(i), handPosition(gravities[i]));
@@ -3155,19 +3243,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout bottom = vertical();
         bottom.setPadding(dp(12), dp(10), dp(12), dp(10));
         bottom.setBackground(rounded("#CC08110F", dp(16), "#284238"));
-        TextView mine = text("Minha mao: " + palitinhosHands[0] + " palito" + (palitinhosHands[0] == 1 ? "" : "s"), 15, "#F8FAFC", Typeface.BOLD);
+        TextView mine = text("Toque na sua mao para escolher: " + palitinhosHands[0], 15, "#F8FAFC", Typeface.BOLD);
         bottom.addView(mine);
         LinearLayout controls = horizontal();
         controls.setGravity(Gravity.CENTER_VERTICAL);
         if (palitinhosRoundPhase == 1 && !palitinhosConfirmed[0]) {
-            controls.addView(iconButton(R.drawable.ic_minus_24, "Menos palitos", dp(42), v -> {
-                palitinhosHands[0] = Math.max(0, palitinhosHands[0] - 1);
-                showPalitinhosScreen();
-            }));
-            controls.addView(iconButton(R.drawable.ic_add_24, "Mais palitos", dp(42), v -> {
-                palitinhosHands[0] = Math.min(3, palitinhosHands[0] + 1);
-                showPalitinhosScreen();
-            }));
             Button confirm = pillButton("Confirmar mao", "#16A34A", "#FFFFFF");
             confirm.setOnClickListener(v -> {
                 palitinhosConfirmed[0] = true;
@@ -3190,7 +3270,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             controls.addView(next, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         }
         bottom.addView(controls, topMargin(dp(8)));
-        TextView bt = text("💬 Chat da partida: toque aqui para abrir as mensagens da mesa.", 11, "#94A3B8", Typeface.NORMAL);
+        TextView bt = text("Chat da partida: toque aqui para abrir as mensagens da mesa.", 11, "#94A3B8", Typeface.NORMAL);
         bt.setOnClickListener(v -> showPalitinhosChatDialog());
         bt.setGravity(Gravity.CENTER);
         bottom.addView(bt, topMargin(dp(6)));
@@ -3213,7 +3293,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout stack = vertical();
         stack.setGravity(Gravity.CENTER);
         ImageView hand = new ImageView(this);
-        boolean revealed = palitinhosRoundPhase == 3 && index < palitinhosRevealCount;
+        boolean choosingMine = index == 0 && palitinhosRoundPhase == 1 && !palitinhosConfirmed[0];
+        boolean revealed = choosingMine || (palitinhosRoundPhase == 3 && index < palitinhosRevealCount);
         hand.setImageResource(revealed ? R.drawable.palitinhos_hand_open : R.drawable.palitinhos_hand_fist);
         hand.setScaleType(ImageView.ScaleType.FIT_CENTER);
         hand.setRotation(palitinhosHandRotation(index));
@@ -3229,6 +3310,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             sticks.setScaleType(ImageView.ScaleType.FIT_CENTER);
             FrameLayout.LayoutParams stickParams = new FrameLayout.LayoutParams(dp(80), dp(80), Gravity.CENTER);
             wrap.addView(sticks, stickParams);
+        }
+        if (choosingMine) {
+            wrap.setOnClickListener(v -> {
+                palitinhosHands[0] = (palitinhosHands[0] + 1) % 4;
+                showPalitinhosScreen();
+            });
         }
         return wrap;
     }
@@ -3251,16 +3338,32 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private String palitinhosPlayerStatus(int index) {
+        String name = palitinhosPlayerName(index);
         if (palitinhosSpectator[index]) {
-            return "fora";
+            return name + " fora";
         }
         if (palitinhosRoundPhase == 1) {
-            return palitinhosConfirmed[index] ? "ok" : "...";
+            return name + " " + (palitinhosConfirmed[index] ? "ok" : "...");
         }
         if (palitinhosRoundPhase == 2) {
-            return palitinhosGuesses[index] >= 0 ? String.valueOf(palitinhosGuesses[index]) : "?";
+            return name + " " + (palitinhosGuesses[index] >= 0 ? String.valueOf(palitinhosGuesses[index]) : "?");
         }
-        return index < palitinhosRevealCount ? String.valueOf(palitinhosHands[index]) : "?";
+        return name + " " + (index < palitinhosRevealCount ? String.valueOf(palitinhosHands[index]) : "?");
+    }
+
+    private String palitinhosPlayerName(int index) {
+        if (index == 0) {
+            UserProfile local = profileStore.loadLocalProfile();
+            return local.isComplete() ? local.getDisplayName() : "Voce";
+        }
+        int inviteIndex = index - 1;
+        if (inviteIndex >= 0 && inviteIndex < palitinhosInvitees.size()) {
+            UserProfile profile = profileStore.loadContact(palitinhosInvitees.get(inviteIndex));
+            if (profile.isComplete()) {
+                return profile.getDisplayName();
+            }
+        }
+        return "J" + (index + 1);
     }
 
     private void showPalitinhosGuessDialog() {
@@ -3290,7 +3393,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return "Fase 1: escolha dos palitos";
         }
         if (palitinhosRoundPhase == 2) {
-            return "Palpite: Jogador " + (palitinhosTurn + 1);
+            return "Palpite: " + palitinhosPlayerName(palitinhosTurn);
         }
         if (palitinhosCountdown > 0) {
             return "Revelando em...";
@@ -6946,7 +7049,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(
                 Math.min(getResources().getDisplayMetrics().widthPixels - dp(42), dp(360)),
-                FrameLayout.LayoutParams.WRAP_CONTENT,
+                dp(150),
                 Gravity.CENTER
         );
         shade.addView(card, cardParams);
@@ -6968,10 +7071,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             overlay.progress.setProgress(progress);
             long elapsed = Math.max(1L, System.currentTimeMillis() - startedAt);
             long remaining = downloaded <= 0 ? 0 : ((long) totalBytes - downloaded) * elapsed / downloaded;
-            overlay.detail.setText(progress + "%  " + formatKb(downloaded) + "/" + formatKb(totalBytes) + "  " + formatRemaining(remaining));
+            overlay.detail.setText(progress + "%  " + formatBytes(downloaded) + "/" + formatBytes(totalBytes) + "  " + formatRemaining(remaining));
         } else {
             overlay.progress.setIndeterminate(true);
-            overlay.detail.setText(formatKb(downloaded) + " baixados");
+            overlay.detail.setText(formatBytes(downloaded) + " baixados");
         }
     }
 
@@ -6981,8 +7084,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
-    private String formatKb(long bytes) {
-        return Math.max(0, bytes / 1024L) + " KB";
+    private String formatBytes(long bytes) {
+        long clean = Math.max(0L, bytes);
+        if (clean < 1024L) {
+            return clean + " bytes";
+        }
+        if (clean < 1024L * 1024L) {
+            return String.format(Locale.getDefault(), "%.1f KB", clean / 1024.0);
+        }
+        return String.format(Locale.getDefault(), "%.1f MB", clean / (1024.0 * 1024.0));
     }
 
     private String formatRemaining(long millis) {
@@ -6990,7 +7100,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return "calculando...";
         }
         long seconds = Math.max(1L, millis / 1000L);
-        return seconds + "s restantes";
+        return seconds + "s";
     }
 
     private void installDownloadedUpdate(File apk) {
@@ -7110,6 +7220,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showPalitinhosLobbyScreen();
         } else if ("palitinhos_config".equals(currentScreen)) {
             showPalitinhosConfigScreen();
+        } else if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosInviteScreen();
         } else {
             showInitialScreen();
         }
