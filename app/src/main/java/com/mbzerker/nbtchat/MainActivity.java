@@ -418,6 +418,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     @Override
     protected void onStop() {
+        NotificationHelper.setActiveChatAddress("");
         if (btChatManager != null && !isChangingConfigurations()) {
             stopScannerDiscoveryCycle();
             btChatManager.stopDiscovery();
@@ -434,6 +435,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        NotificationHelper.setActiveChatAddress("");
         sendLocalTyping(false);
         stopVoicePlayback(false);
         stopTable100AutoSync();
@@ -1031,6 +1033,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void leaveChatToHome() {
+        NotificationHelper.setActiveChatAddress("");
         sendLocalTyping(false);
         hideKeyboard(messageInput);
         stopVoicePlayback(false);
@@ -2014,6 +2017,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             btChatManager.stopDiscovery();
         }
         currentScreen = "chat";
+        NotificationHelper.setActiveChatAddress(currentRemoteAddress);
         startBlePresenceForCurrentScreen();
         currentRemoteProfile = profile == null ? UserProfile.empty() : profile;
         currentFingerprint = fingerprint == null ? "" : fingerprint;
@@ -3039,6 +3043,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private void showPalitinhosLobbyScreen() {
         currentScreen = "palitinhos_lobby";
+        probePalitinhosConnections();
         ScrollView scrollView = new ScrollView(this);
         getWindow().getDecorView().setBackgroundColor(color("#0B1512"));
         scrollView.setFillViewport(true);
@@ -3150,6 +3155,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             root.addView(text("Nenhum contato pareado para convidar.", 14, secondary(), Typeface.BOLD), topMargin(dp(18)));
         } else {
             for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
+                connectForPalitinhosStatus(entry.getKey());
                 root.addView(palitinhosInviteRow(entry.getKey(), entry.getValue()), topMargin(dp(8)));
             }
         }
@@ -3164,14 +3170,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
         row.setBackground(rounded(surface(), dp(12), selected ? "#16A34A" : border()));
-        ImageView avatar = new ImageView(this);
-        applyAvatar(avatar, profile);
-        row.addView(avatar, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        FrameLayout avatar = avatarStatusFrame(profile, contactPresenceStatus(address), dp(44), dp(22), dp(3), false, null);
+        LoadingRingView ring = statusRingView(avatar);
+        if (ring != null && homePresenceConnecting.contains(address)) {
+            ring.startLoading();
+        }
+        row.addView(avatar, new LinearLayout.LayoutParams(dp(44), dp(44)));
         TextView label = text(name, 16, primary(), Typeface.BOLD);
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         labelParams.setMargins(dp(12), 0, 0, 0);
         row.addView(label, labelParams);
-        row.addView(text(selected ? "Selecionado" : "Convidar", 13, selected ? "#16A34A" : secondary(), Typeface.BOLD));
+        String presence = contactPresenceStatus(address);
+        String statusText = homePresenceConnecting.contains(address) ? "Conectando" : presenceLabel(presence);
+        TextView status = text((selected ? "Selecionado\n" : "") + statusText, 12,
+                homePresenceConnecting.contains(address) ? "#FACC15" : presenceColor(presence), Typeface.BOLD);
+        status.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        row.addView(status);
         row.setOnClickListener(v -> {
             int limit = Math.max(0, palitinhosPlayers - 1);
             if (palitinhosInvitees.contains(address)) {
@@ -3184,6 +3198,43 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showPalitinhosInviteScreen();
         });
         return row;
+    }
+
+    private void probePalitinhosConnections() {
+        if (palitinhosHostMode) {
+            for (String address : new ArrayList<>(palitinhosInvitees)) {
+                connectForPalitinhosStatus(address);
+            }
+        } else if (palitinhosHostAddress != null && !palitinhosHostAddress.trim().isEmpty()) {
+            connectForPalitinhosStatus(palitinhosHostAddress);
+        }
+    }
+
+    private void connectForPalitinhosStatus(String address) {
+        if (address == null || address.trim().isEmpty() || btChatManager == null || profileStore.isBlocked(address)) {
+            return;
+        }
+        if (btChatManager.canSendTo(address) || btChatManager.isConnectedTo(address)) {
+            homePresenceConnecting.remove(address);
+            return;
+        }
+        if (homePresenceConnecting.contains(address)) {
+            return;
+        }
+        BtChatManager.DeviceCandidate candidate = btChatManager.getPairedCandidate(address);
+        if (candidate == null) {
+            return;
+        }
+        homePresenceConnecting.add(address);
+        connectForAddress(address);
+        uiHandler.postDelayed(() -> {
+            homePresenceConnecting.remove(address);
+            if ("palitinhos_invite".equals(currentScreen)) {
+                showPalitinhosInviteScreen();
+            } else if ("palitinhos_lobby".equals(currentScreen)) {
+                showPalitinhosLobbyScreen();
+            }
+        }, 3500L);
     }
 
     private void sendPalitinhosInvites() {
@@ -3228,7 +3279,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (palitinhosHostAddress == null || palitinhosHostAddress.trim().isEmpty()) {
             return;
         }
-        String body = palitinhosInviteBody("ready");
+        sendPalitinhosSignalToHost("ready");
+    }
+
+    private void sendPalitinhosJoin() {
+        sendPalitinhosSignalToHost("join");
+    }
+
+    private void sendPalitinhosSignalToHost(String type) {
+        if (palitinhosHostAddress == null || palitinhosHostAddress.trim().isEmpty()) {
+            return;
+        }
+        String body = palitinhosInviteBody(type);
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
         messageStore.addMessage(palitinhosHostAddress, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
@@ -5081,6 +5143,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             palitinhosHands[i] = 0;
             palitinhosGuesses[i] = -1;
         }
+        connectForPalitinhosStatus(palitinhosHostAddress);
+        sendPalitinhosJoin();
         showPalitinhosLobbyScreen();
     }
 
@@ -5794,7 +5858,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return false;
         }
         JSONObject json = palitinhosJson(body);
-        if (!"ready".equals(json.optString("type", "invite"))) {
+        String type = json.optString("type", "invite");
+        if (!"ready".equals(type) && !"join".equals(type)) {
             return false;
         }
         if (!palitinhosHostMode) {
@@ -5808,7 +5873,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (inviteIndex < 0 || inviteIndex + 1 >= palitinhosReady.length) {
             return true;
         }
-        palitinhosReady[inviteIndex + 1] = json.optBoolean("ready", false);
+        palitinhosReady[inviteIndex + 1] = "ready".equals(type) && json.optBoolean("ready", false);
         if ("palitinhos_lobby".equals(currentScreen)) {
             showPalitinhosLobbyScreen();
         } else {
@@ -5979,6 +6044,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             renderNearbyDeviceList();
         } else if ("home".equals(currentScreen)) {
             renderContactList();
+        } else if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosInviteScreen();
+        } else if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
         }
     }
 
@@ -6084,6 +6153,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         } else if ("home".equals(currentScreen)) {
             renderContactList();
+        } else if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosInviteScreen();
+        } else if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
         }
         flushPendingOutgoing(address);
         resendUndeliveredMessages(address);
@@ -6119,6 +6192,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         } else if ("home".equals(currentScreen)) {
             renderContactList();
+        } else if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosInviteScreen();
+        } else if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
         }
     }
 
@@ -6199,6 +6276,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             updateChatHeaderStatus();
         } else if ("home".equals(currentScreen)) {
             renderContactList();
+        } else if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosInviteScreen();
+        } else if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
         }
     }
 
@@ -6217,6 +6298,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             updateChatHeaderStatus();
         } else if ("home".equals(currentScreen)) {
             renderContactList();
+        } else if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosInviteScreen();
+        } else if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
         }
     }
 

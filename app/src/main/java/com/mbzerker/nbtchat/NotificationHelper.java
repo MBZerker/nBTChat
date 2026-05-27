@@ -19,6 +19,7 @@ public final class NotificationHelper {
     private static final int REQUEST_NOTIFICATION_ID = 42;
     private static final int UPDATE_NOTIFICATION_ID = 88;
     public static final int ONLINE_NOTIFICATION_ID = 73;
+    private static volatile String activeChatAddress = "";
 
     private NotificationHelper() {
     }
@@ -116,6 +117,9 @@ public final class NotificationHelper {
     }
 
     public static void showMessageNotification(Context context, String remoteAddress, String remoteName, String body, int unread) {
+        if (remoteAddress != null && remoteAddress.equals(activeChatAddress)) {
+            return;
+        }
         AppSettingsStore settingsStore = new AppSettingsStore(context);
         if (!settingsStore.notificationsEnabled()) {
             return;
@@ -153,6 +157,10 @@ public final class NotificationHelper {
 
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         manager.notify(remoteAddress == null ? 44 : remoteAddress.hashCode(), notification);
+    }
+
+    public static void setActiveChatAddress(String address) {
+        activeChatAddress = address == null ? "" : address;
     }
 
     private static void ensureMessageChannel(Context context, String channelId, String soundUri) {
