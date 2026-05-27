@@ -29,6 +29,7 @@ public final class MessageStore {
     public static final String KIND_TABLE_100_CHOICE = "table100_choice";
     public static final String KIND_TABLE_100_CONFIRM = "table100_confirm";
     public static final String KIND_CONTACT_INVITE = "contact_invite";
+    public static final String KIND_PALITINHOS_INVITE = "palitinhos_invite";
     public static final String STATUS_PENDING = "pending";
     public static final String STATUS_SENT = "sent";
     public static final String STATUS_DELIVERED = "delivered";
@@ -290,6 +291,9 @@ public final class MessageStore {
         }
         if (KIND_CONTACT_INVITE.equals(message.kind)) {
             return message.mine ? "Voce enviou um contato" : "Contato nBTChat";
+        }
+        if (KIND_PALITINHOS_INVITE.equals(message.kind)) {
+            return message.mine ? "Voce enviou um convite de Palitinhos" : "Convite para Palitinhos";
         }
         return message.body;
     }

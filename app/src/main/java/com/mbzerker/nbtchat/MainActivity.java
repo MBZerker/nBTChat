@@ -279,6 +279,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private int palitinhosHandTimeSeconds = 15;
     private String palitinhosChatDraft = "";
     private final ArrayList<String> palitinhosInvitees = new ArrayList<>();
+    private boolean palitinhosHostMode = true;
+    private String palitinhosGameId = "";
+    private String palitinhosHostAddress = "";
+    private String palitinhosHostName = "";
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -2939,8 +2943,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showPalitinhosConfigScreen() {
         currentScreen = "palitinhos_config";
         ScrollView scrollView = new ScrollView(this);
+        getWindow().getDecorView().setBackgroundColor(color(background()));
+        scrollView.setFillViewport(true);
+        scrollView.setBackgroundColor(color(background()));
         LinearLayout root = vertical();
         root.setBackgroundColor(color(background()));
+        root.setMinimumHeight(getResources().getDisplayMetrics().heightPixels);
         applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
         scrollView.addView(root, matchWrap());
 
@@ -2986,6 +2994,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Button lobby = pillButton("Iniciar", "#16A34A", "#FFFFFF");
         lobby.setOnClickListener(v -> {
             resetPalitinhosLobby();
+            palitinhosHostMode = true;
+            palitinhosHostAddress = "";
+            palitinhosHostName = "";
+            palitinhosGameId = messageStore.createId();
             showPalitinhosLobbyScreen();
         });
         root.addView(lobby, topMargin(dp(16)));
@@ -3028,9 +3040,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showPalitinhosLobbyScreen() {
         currentScreen = "palitinhos_lobby";
         ScrollView scrollView = new ScrollView(this);
+        getWindow().getDecorView().setBackgroundColor(color("#0B1512"));
+        scrollView.setFillViewport(true);
         scrollView.setBackgroundColor(color("#0B1512"));
         LinearLayout root = vertical();
         root.setBackgroundColor(color("#0B1512"));
+        root.setMinimumHeight(getResources().getDisplayMetrics().heightPixels);
         applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
         scrollView.addView(root, matchWrap());
 
@@ -3043,7 +3058,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         top.addView(title, titleParams);
         root.addView(top);
 
-        root.addView(text("Aguardando jogadores. Quando todos estiverem prontos, a partida comeca.", 14, "#CBD5E1", Typeface.NORMAL), topMargin(dp(12)));
+        root.addView(text(palitinhosHostMode
+                ? "Aguardando jogadores. Quando todos estiverem prontos, a partida comeca."
+                : "Convite recebido. Marque quando estiver pronto para jogar.", 14, "#CBD5E1", Typeface.NORMAL), topMargin(dp(12)));
         LinearLayout controls = horizontal();
         controls.setGravity(Gravity.CENTER_VERTICAL);
         controls.addView(iconButton(R.drawable.ic_minus_24, "Menos jogadores", dp(42), v -> {
@@ -3057,31 +3074,40 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             palitinhosPlayers = Math.min(6, palitinhosPlayers + 1);
             showPalitinhosLobbyScreen();
         }));
-        root.addView(controls, topMargin(dp(16)));
+        if (palitinhosHostMode) {
+            root.addView(controls, topMargin(dp(16)));
+        }
 
-        Button invite = pillButton("Convidar", surfaceAlt(), primary());
-        invite.setOnClickListener(v -> showPalitinhosInviteScreen());
-        root.addView(invite, topMargin(dp(10)));
+        if (palitinhosHostMode) {
+            Button invite = pillButton("Convidar", surfaceAlt(), primary());
+            invite.setOnClickListener(v -> showPalitinhosInviteScreen());
+            root.addView(invite, topMargin(dp(10)));
+        }
 
         for (int i = 0; i < palitinhosPlayers; i++) {
             root.addView(palitinhosLobbyPlayerRow(i), topMargin(dp(8)));
         }
 
-        Button ready = pillButton(palitinhosReady[0] ? "Nao estou pronto" : "Pronto", palitinhosReady[0] ? surfaceAlt() : "#16A34A", palitinhosReady[0] ? primary() : "#FFFFFF");
+        Button ready = pillButton(palitinhosReady[0] ? "Nao estou pronto" : "Estou pronto", palitinhosReady[0] ? surfaceAlt() : "#16A34A", palitinhosReady[0] ? primary() : "#FFFFFF");
         ready.setOnClickListener(v -> {
             palitinhosReady[0] = !palitinhosReady[0];
+            if (!palitinhosHostMode) {
+                sendPalitinhosReady();
+            }
             showPalitinhosLobbyScreen();
         });
         root.addView(ready, topMargin(dp(16)));
-        Button start = pillButton("Comecar partida", allPalitinhosReady() ? "#16A34A" : "#64748B", "#FFFFFF");
-        start.setOnClickListener(v -> {
-            if (!allPalitinhosReady()) {
-                Toast.makeText(this, "Aguarde todos ficarem prontos.", Toast.LENGTH_LONG).show();
-                return;
-            }
-            startPalitinhosRound(true);
-        });
-        root.addView(start, topMargin(dp(8)));
+        if (palitinhosHostMode) {
+            Button start = pillButton("Comecar partida", allPalitinhosReady() ? "#16A34A" : "#64748B", "#FFFFFF");
+            start.setOnClickListener(v -> {
+                if (!allPalitinhosReady()) {
+                    Toast.makeText(this, "Aguarde todos ficarem prontos.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                startPalitinhosRound(true);
+            });
+            root.addView(start, topMargin(dp(8)));
+        }
 
         setContentView(scrollView);
         requestInsets(root);
@@ -3100,8 +3126,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void showPalitinhosInviteScreen() {
         currentScreen = "palitinhos_invite";
         ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setBackgroundColor(color(background()));
         LinearLayout root = vertical();
         root.setBackgroundColor(color(background()));
+        root.setMinimumHeight(getResources().getDisplayMetrics().heightPixels);
         applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
         scrollView.addView(root, matchWrap());
         LinearLayout top = horizontal();
@@ -3112,12 +3141,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         titleParams.setMargins(dp(12), 0, 0, 0);
         top.addView(title, titleParams);
         top.addView(iconButton(R.drawable.ic_send_24, "Concluir", dp(42), v -> {
-            int invited = Math.min(palitinhosInvitees.size(), Math.max(0, palitinhosPlayers - 1));
-            for (int i = 1; i < palitinhosPlayers; i++) {
-                palitinhosReady[i] = false;
-            }
-            Toast.makeText(this, invited + " convite(s) preparado(s).", Toast.LENGTH_SHORT).show();
-            showPalitinhosLobbyScreen();
+            sendPalitinhosInvites();
         }));
         root.addView(top);
         root.addView(text("Selecione ate " + Math.max(0, palitinhosPlayers - 1) + " contato(s).", 14, secondary(), Typeface.NORMAL), topMargin(dp(12)));
@@ -3160,6 +3184,55 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showPalitinhosInviteScreen();
         });
         return row;
+    }
+
+    private void sendPalitinhosInvites() {
+        int limit = Math.max(0, palitinhosPlayers - 1);
+        if (palitinhosInvitees.isEmpty()) {
+            Toast.makeText(this, "Selecione pelo menos um contato.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (palitinhosGameId == null || palitinhosGameId.trim().isEmpty()) {
+            palitinhosGameId = messageStore.createId();
+        }
+        int invited = Math.min(palitinhosInvitees.size(), limit);
+        String body = palitinhosInviteBody("invite");
+        long sentAt = System.currentTimeMillis();
+        for (int i = 0; i < invited; i++) {
+            String address = palitinhosInvitees.get(i);
+            String id = messageStore.createId();
+            messageStore.addMessage(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
+            sendOrQueueOutgoing(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt);
+            palitinhosReady[i + 1] = false;
+        }
+        Toast.makeText(this, invited + " convite(s) enviados.", Toast.LENGTH_SHORT).show();
+        showPalitinhosLobbyScreen();
+    }
+
+    private String palitinhosInviteBody(String type) {
+        try {
+            JSONObject json = new JSONObject();
+            json.put("type", type);
+            json.put("gameId", palitinhosGameId == null ? "" : palitinhosGameId);
+            json.put("hostName", palitinhosPlayerName(0));
+            json.put("players", palitinhosPlayers);
+            json.put("handTimeSeconds", palitinhosHandTimeSeconds);
+            json.put("ready", palitinhosReady[0]);
+            return json.toString();
+        } catch (JSONException ignored) {
+            return "";
+        }
+    }
+
+    private void sendPalitinhosReady() {
+        if (palitinhosHostAddress == null || palitinhosHostAddress.trim().isEmpty()) {
+            return;
+        }
+        String body = palitinhosInviteBody("ready");
+        long sentAt = System.currentTimeMillis();
+        String id = messageStore.createId();
+        messageStore.addMessage(palitinhosHostAddress, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
+        sendOrQueueOutgoing(palitinhosHostAddress, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt);
     }
 
     private boolean allPalitinhosReady() {
@@ -3355,6 +3428,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (index == 0) {
             UserProfile local = profileStore.loadLocalProfile();
             return local.isComplete() ? local.getDisplayName() : "Voce";
+        }
+        if (!palitinhosHostMode && index == 1 && palitinhosHostName != null && !palitinhosHostName.trim().isEmpty()) {
+            return palitinhosHostName;
         }
         int inviteIndex = index - 1;
         if (inviteIndex >= 0 && inviteIndex < palitinhosInvitees.size()) {
@@ -4817,6 +4893,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             hint.setOnClickListener(openTable);
         } else if (MessageStore.KIND_CONTACT_INVITE.equals(kind)) {
             addContactCardToBubble(bubble, body, mine);
+        } else if (MessageStore.KIND_PALITINHOS_INVITE.equals(kind)) {
+            addPalitinhosInviteToBubble(bubble, body, mine);
         } else if ((MessageStore.KIND_IMAGE.equals(kind) || MessageStore.KIND_GIF.equals(kind)) && mediaBase64 != null && !mediaBase64.isEmpty()) {
             if (MessageStore.KIND_GIF.equals(kind)) {
                 addGifBadge(bubble, mine);
@@ -4950,6 +5028,60 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         connectParams.setMargins(dp(8), 0, 0, 0);
         actions.addView(connect, connectParams);
         bubble.addView(actions, topMargin(dp(8)));
+    }
+
+    private void addPalitinhosInviteToBubble(LinearLayout bubble, String body, boolean mine) {
+        JSONObject json = palitinhosJson(body);
+        String type = json.optString("type", "invite");
+        String hostName = safeName(json.optString("hostName", "Contato"), "Contato");
+        TextView title = text("Convite para Palitinhos", 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
+        title.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play_24, 0, 0, 0);
+        title.setCompoundDrawablePadding(dp(8));
+        bubble.addView(title);
+
+        String detail = "ready".equals(type)
+                ? "Jogador marcou presenca."
+                : hostName + " chamou voce para uma partida.";
+        bubble.addView(text(detail, 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL), topMargin(dp(2)));
+
+        if (mine || "ready".equals(type)) {
+            return;
+        }
+        Button join = pillButton("Entrar", "#16A34A", "#FFFFFF");
+        join.setTextSize(12);
+        join.setOnClickListener(v -> acceptPalitinhosInvite(body));
+        bubble.addView(join, topMargin(dp(8)));
+    }
+
+    private JSONObject palitinhosJson(String body) {
+        try {
+            return new JSONObject(body == null ? "{}" : body);
+        } catch (JSONException ignored) {
+            return new JSONObject();
+        }
+    }
+
+    private void acceptPalitinhosInvite(String body) {
+        JSONObject json = palitinhosJson(body);
+        String gameId = json.optString("gameId", "");
+        if (gameId.trim().isEmpty()) {
+            Toast.makeText(this, "Convite invalido.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        palitinhosHostMode = false;
+        palitinhosGameId = gameId;
+        palitinhosHostAddress = currentRemoteAddress == null ? "" : currentRemoteAddress;
+        palitinhosHostName = safeName(json.optString("hostName", "Host"), "Host");
+        palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", 2)));
+        palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+        for (int i = 0; i < 6; i++) {
+            palitinhosReady[i] = false;
+            palitinhosConfirmed[i] = false;
+            palitinhosSpectator[i] = false;
+            palitinhosHands[i] = 0;
+            palitinhosGuesses[i] = -1;
+        }
+        showPalitinhosLobbyScreen();
     }
 
     private void saveSharedContact(ContactCardPayload payload) {
@@ -5657,6 +5789,34 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return true;
     }
 
+    private boolean handlePalitinhosEvent(String address, String kind, String body) {
+        if (!MessageStore.KIND_PALITINHOS_INVITE.equals(kind)) {
+            return false;
+        }
+        JSONObject json = palitinhosJson(body);
+        if (!"ready".equals(json.optString("type", "invite"))) {
+            return false;
+        }
+        if (!palitinhosHostMode) {
+            return true;
+        }
+        String gameId = json.optString("gameId", "");
+        if (palitinhosGameId == null || palitinhosGameId.isEmpty() || !palitinhosGameId.equals(gameId)) {
+            return true;
+        }
+        int inviteIndex = palitinhosInvitees.indexOf(address);
+        if (inviteIndex < 0 || inviteIndex + 1 >= palitinhosReady.length) {
+            return true;
+        }
+        palitinhosReady[inviteIndex + 1] = json.optBoolean("ready", false);
+        if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
+        } else {
+            Toast.makeText(this, palitinhosPlayerName(inviteIndex + 1) + " atualizou presenca.", Toast.LENGTH_SHORT).show();
+        }
+        return true;
+    }
+
     private void updateChatHeaderStatus() {
         String presence = contactPresenceStatus(currentRemoteAddress);
         LoadingRingView ring = statusRingView(chatAvatarFrame);
@@ -5939,6 +6099,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         if (handleTable100Event(address, kind, body)) {
+            return;
+        }
+        if (handlePalitinhosEvent(address, kind, body)) {
             return;
         }
         boolean activeChat = "chat".equals(currentScreen) && address.equals(currentRemoteAddress);
@@ -6828,6 +6991,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (MessageStore.KIND_CONTACT_INVITE.equals(message.kind)) {
             return message.mine ? "Voce enviou um contato" : "Contato nBTChat";
+        }
+        if (MessageStore.KIND_PALITINHOS_INVITE.equals(message.kind)) {
+            return message.mine ? "Voce enviou um convite de Palitinhos" : "Convite para Palitinhos";
         }
         String body = message.body == null ? "" : message.body.trim();
         if (body.length() > 80) {

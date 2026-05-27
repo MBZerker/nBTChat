@@ -153,7 +153,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
                 ? "Mensagem de voz"
                 : (MessageStore.KIND_TABLE_100.equals(kind)
                 ? GadgetStore.TABLE_100_TITLE
-                : (MessageStore.KIND_CONTACT_INVITE.equals(kind) ? "Contato nBTChat" : body)));
+                : (MessageStore.KIND_CONTACT_INVITE.equals(kind)
+                ? "Contato nBTChat"
+                : (MessageStore.KIND_PALITINHOS_INVITE.equals(kind) ? "Convite para Palitinhos" : body))));
         if (!profileStore.isMuted(address)) {
             NotificationHelper.showMessageNotification(this, address, remoteName, preview, unread);
         }

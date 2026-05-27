@@ -1,9 +1,9 @@
 {
-  "versionCode": 60,
-  "versionName": "0.4.38",
+  "versionCode": 61,
+  "versionName": "0.4.39",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.38.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.39.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Ajusta a tela de download de update e melhora o fluxo do Palitinhos com configuracao, lobby, convites, nomes dos contatos e escolha pela propria mao."
+  "changelog": "Corrige fundo da configuracao do Palitinhos em mais aparelhos e envia convites reais pelo chat com entrada no lobby."
 }
