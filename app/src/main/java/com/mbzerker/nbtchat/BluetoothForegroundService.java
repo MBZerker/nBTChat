@@ -140,6 +140,9 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         if (handleTable100Event(address, kind, body)) {
             return;
         }
+        if (isInternalPalitinhosEvent(kind, body)) {
+            return;
+        }
         UserProfile profile = profileStore.loadContact(address);
         String remoteName = profile.isComplete() ? profile.getDisplayName() : "nBTChat";
         boolean inserted = messageStore.addMessage(address, id, kind, body, mediaBase64, durationMs, false, sentAt, MessageStore.STATUS_DELIVERED, true, replyToId, replyPreview);
@@ -169,6 +172,18 @@ public final class BluetoothForegroundService extends Service implements BtChatM
         changed.putExtra(MessageStore.EXTRA_SENT_AT, sentAt);
         changed.putExtra(MessageStore.EXTRA_UNREAD, unread);
         sendBroadcast(changed);
+    }
+
+    private boolean isInternalPalitinhosEvent(String kind, String body) {
+        if (!MessageStore.KIND_PALITINHOS_INVITE.equals(kind)) {
+            return false;
+        }
+        try {
+            JSONObject json = new JSONObject(body == null ? "{}" : body);
+            return !"invite".equals(json.optString("type", "invite"));
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     @Override

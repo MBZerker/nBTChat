@@ -284,6 +284,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String palitinhosGameId = "";
     private String palitinhosHostAddress = "";
     private String palitinhosHostName = "";
+    private int palitinhosStartCountdown = 0;
+    private String palitinhosReturnScreen = "";
+    private String palitinhosReturnAddress = "";
+    private UserProfile palitinhosReturnProfile = UserProfile.empty();
+    private String palitinhosReturnFingerprint = "";
+    private final Set<String> expiredPalitinhosGames = new HashSet<>();
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -474,8 +480,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showHomeScreen();
         } else if ("palitinhos_invite".equals(currentScreen)) {
             showPalitinhosLobbyScreen();
+        } else if ("palitinhos".equals(currentScreen) || "palitinhos_lobby".equals(currentScreen) || "palitinhos_start".equals(currentScreen)) {
+            leavePalitinhosToPreviousScreen();
         } else if ("store_config".equals(currentScreen) || "table100_play".equals(currentScreen) || "cartela_purchase".equals(currentScreen)
-                || "palitinhos".equals(currentScreen) || "palitinhos_lobby".equals(currentScreen)
                 || "palitinhos_config".equals(currentScreen)) {
             showStoreScreen();
         } else if ("store".equals(currentScreen)) {
@@ -2959,7 +2966,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         LinearLayout top = horizontal();
         top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showStoreScreen()));
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> leavePalitinhosToPreviousScreen()));
         TextView title = text("Configurar Palitinhos", 24, primary(), Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
@@ -3003,6 +3010,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             palitinhosHostAddress = "";
             palitinhosHostName = "";
             palitinhosGameId = messageStore.createId();
+            palitinhosReturnScreen = "palitinhos_config";
+            palitinhosReturnAddress = "";
+            palitinhosReturnProfile = UserProfile.empty();
+            palitinhosReturnFingerprint = "";
             showPalitinhosLobbyScreen();
         });
         root.addView(lobby, topMargin(dp(16)));
@@ -3058,7 +3069,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         LinearLayout top = horizontal();
         top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showPalitinhosConfigScreen()));
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> leavePalitinhosToPreviousScreen()));
         TextView title = text("Lobby Palitinhos", 25, "#F8FAFC", Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
@@ -3111,7 +3122,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     Toast.makeText(this, "Aguarde todos ficarem prontos.", Toast.LENGTH_LONG).show();
                     return;
                 }
-                startPalitinhosRound(true);
+                startPalitinhosFromHost();
             });
             root.addView(start, topMargin(dp(8)));
         }
@@ -3283,6 +3294,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         showPalitinhosLobbyScreen();
     }
 
+    private void startPalitinhosFromHost() {
+        String body = palitinhosInviteBody("start_countdown");
+        for (int i = 0; i < Math.min(palitinhosInvitees.size(), palitinhosPlayers - 1); i++) {
+            if (palitinhosJoined[i + 1] && palitinhosReady[i + 1]) {
+                sendPalitinhosInternal(palitinhosInvitees.get(i), body);
+            }
+        }
+        beginPalitinhosStartCountdown(3);
+    }
+
     private String palitinhosInviteBody(String type) {
         try {
             JSONObject json = new JSONObject();
@@ -3292,6 +3313,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             json.put("players", palitinhosPlayers);
             json.put("handTimeSeconds", palitinhosHandTimeSeconds);
             json.put("ready", palitinhosReady[0]);
+            json.put("countdown", 3);
             return json.toString();
         } catch (JSONException ignored) {
             return "";
@@ -3314,10 +3336,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         String body = palitinhosInviteBody(type);
+        sendPalitinhosInternal(palitinhosHostAddress, body);
+    }
+
+    private void sendPalitinhosInternal(String address, String body) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
         long sentAt = System.currentTimeMillis();
         String id = messageStore.createId();
-        messageStore.addMessage(palitinhosHostAddress, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
-        sendOrQueueOutgoing(palitinhosHostAddress, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt);
+        if (btChatManager != null && btChatManager.canSendTo(address)) {
+            btChatManager.sendChatMessage(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt, "", "");
+            return;
+        }
+        PendingOutgoing outgoing = new PendingOutgoing(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt, "", "");
+        pendingOutgoing.add(outgoing);
+        connectForAddress(address);
+        scheduleWakeForPendingOutgoing(outgoing);
     }
 
     private boolean allPalitinhosReady() {
@@ -3347,6 +3382,34 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
         }
         showPalitinhosScreen();
+    }
+
+    private void beginPalitinhosStartCountdown(int count) {
+        palitinhosStartCountdown = Math.max(1, count);
+        showPalitinhosStartCountdownScreen();
+    }
+
+    private void showPalitinhosStartCountdownScreen() {
+        currentScreen = "palitinhos_start";
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(color("#07130F"));
+        applyRootInsets(root, dp(16), dp(10), dp(16), dp(18));
+        TextView count = text(String.valueOf(palitinhosStartCountdown), 112, "#FACC15", Typeface.BOLD);
+        count.setGravity(Gravity.CENTER);
+        root.addView(count, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        setContentView(root);
+        requestInsets(root);
+        uiHandler.postDelayed(() -> {
+            if (!"palitinhos_start".equals(currentScreen)) {
+                return;
+            }
+            palitinhosStartCountdown--;
+            if (palitinhosStartCountdown <= 0) {
+                startPalitinhosRound(true);
+            } else {
+                showPalitinhosStartCountdownScreen();
+            }
+        }, 1000L);
     }
 
     private void showPalitinhosScreen() {
@@ -3441,10 +3504,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         stack.addView(name);
         wrap.addView(stack, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         if (revealed && palitinhosHands[index] > 0) {
-            ImageView sticks = new ImageView(this);
-            sticks.setImageResource(R.drawable.palitinhos_sticks);
-            sticks.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            FrameLayout.LayoutParams stickParams = new FrameLayout.LayoutParams(dp(80), dp(80), Gravity.CENTER);
+            PalitinhosSticksView sticks = new PalitinhosSticksView(this, palitinhosHands[index]);
+            FrameLayout.LayoutParams stickParams = new FrameLayout.LayoutParams(dp(86), dp(92), Gravity.CENTER);
             wrap.addView(sticks, stickParams);
         }
         if (choosingMine) {
@@ -3707,6 +3768,38 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private boolean palitinhosWinner(int index) {
         return !palitinhosSpectator[index] && palitinhosGuesses[index] == palitinhosTotal();
+    }
+
+    private void expirePalitinhosRoom() {
+        if (palitinhosGameId == null || palitinhosGameId.trim().isEmpty() || expiredPalitinhosGames.contains(palitinhosGameId)) {
+            return;
+        }
+        expiredPalitinhosGames.add(palitinhosGameId);
+        if (palitinhosHostMode) {
+            String body = palitinhosInviteBody("expire");
+            for (String address : new ArrayList<>(palitinhosInvitees)) {
+                sendPalitinhosInternal(address, body);
+            }
+        }
+        // TODO: implementar transferencia de host quando houver estado multiplayer completo.
+    }
+
+    private void leavePalitinhosToPreviousScreen() {
+        if (palitinhosHostMode && ("palitinhos_lobby".equals(currentScreen) || "palitinhos_start".equals(currentScreen) || "palitinhos".equals(currentScreen))) {
+            expirePalitinhosRoom();
+        }
+        if ("chat".equals(palitinhosReturnScreen) && palitinhosReturnAddress != null && !palitinhosReturnAddress.trim().isEmpty()) {
+            currentRemoteAddress = palitinhosReturnAddress;
+            currentRemoteProfile = palitinhosReturnProfile == null ? profileStore.loadContact(currentRemoteAddress) : palitinhosReturnProfile;
+            currentFingerprint = palitinhosReturnFingerprint == null ? profileStore.loadFingerprint(currentRemoteAddress) : palitinhosReturnFingerprint;
+            showChatScreen(currentRemoteProfile, currentFingerprint);
+            return;
+        }
+        if ("palitinhos_config".equals(palitinhosReturnScreen)) {
+            showPalitinhosConfigScreen();
+            return;
+        }
+        showStoreScreen();
     }
 
     private void advancePalitinhosReveal() {
@@ -5180,17 +5273,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         JSONObject json = palitinhosJson(body);
         String type = json.optString("type", "invite");
         String hostName = safeName(json.optString("hostName", "Contato"), "Contato");
-        TextView title = text("Convite para Palitinhos", 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
+        String gameId = json.optString("gameId", "");
+        boolean expired = json.optBoolean("expired", false) || expiredPalitinhosGames.contains(gameId);
+        TextView title = text(expired ? "Palitinhos" : "Convite para Palitinhos", 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
         title.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play_24, 0, 0, 0);
         title.setCompoundDrawablePadding(dp(8));
         bubble.addView(title);
 
-        String detail = "ready".equals(type)
+        String detail = expired
+                ? "Jogo expirou"
+                : ("ready".equals(type)
                 ? "Jogador marcou presenca."
-                : ("join".equals(type) ? "Jogador entrou no lobby." : hostName + " chamou voce para uma partida.");
+                : ("join".equals(type) ? "Jogador entrou no lobby." : hostName + " chamou voce para uma partida."));
         bubble.addView(text(detail, 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL), topMargin(dp(2)));
 
-        if (mine || !"invite".equals(type)) {
+        if (mine || expired || !"invite".equals(type)) {
             return;
         }
         Button join = pillButton("Entrar", "#16A34A", "#FFFFFF");
@@ -5210,10 +5307,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private void acceptPalitinhosInvite(String body) {
         JSONObject json = palitinhosJson(body);
         String gameId = json.optString("gameId", "");
-        if (gameId.trim().isEmpty()) {
-            Toast.makeText(this, "Convite invalido.", Toast.LENGTH_LONG).show();
+        if (gameId.trim().isEmpty() || expiredPalitinhosGames.contains(gameId) || json.optBoolean("expired", false)) {
+            Toast.makeText(this, gameId.trim().isEmpty() ? "Convite invalido." : "Jogo expirou.", Toast.LENGTH_LONG).show();
+            if (!gameId.trim().isEmpty()) {
+                expiredPalitinhosGames.add(gameId);
+                renderChatHistory(false);
+            }
             return;
         }
+        palitinhosReturnScreen = "chat";
+        palitinhosReturnAddress = currentRemoteAddress == null ? "" : currentRemoteAddress;
+        palitinhosReturnProfile = currentRemoteProfile == null ? UserProfile.empty() : currentRemoteProfile;
+        palitinhosReturnFingerprint = currentFingerprint == null ? "" : currentFingerprint;
         palitinhosHostMode = false;
         palitinhosGameId = gameId;
         palitinhosHostAddress = currentRemoteAddress == null ? "" : currentRemoteAddress;
@@ -5944,13 +6049,35 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         JSONObject json = palitinhosJson(body);
         String type = json.optString("type", "invite");
-        if (!"ready".equals(type) && !"join".equals(type)) {
+        if ("invite".equals(type)) {
             return false;
+        }
+        String gameId = json.optString("gameId", "");
+        if ("expire".equals(type)) {
+            if (!gameId.isEmpty()) {
+                expiredPalitinhosGames.add(gameId);
+            }
+            if (gameId.equals(palitinhosGameId)
+                    && ("palitinhos_lobby".equals(currentScreen) || "palitinhos_start".equals(currentScreen) || "palitinhos".equals(currentScreen))) {
+                Toast.makeText(this, "Jogo expirou.", Toast.LENGTH_LONG).show();
+                leavePalitinhosToPreviousScreen();
+            } else if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+                renderChatHistory(false);
+            }
+            return true;
+        }
+        if ("start_countdown".equals(type)) {
+            if (gameId.equals(palitinhosGameId) && !palitinhosHostMode && !expiredPalitinhosGames.contains(gameId)) {
+                beginPalitinhosStartCountdown(Math.max(1, json.optInt("countdown", 3)));
+            }
+            return true;
+        }
+        if (!"ready".equals(type) && !"join".equals(type)) {
+            return true;
         }
         if (!palitinhosHostMode) {
             return true;
         }
-        String gameId = json.optString("gameId", "");
         if (palitinhosGameId == null || palitinhosGameId.isEmpty() || !palitinhosGameId.equals(gameId)) {
             return true;
         }
@@ -7559,6 +7686,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showPalitinhosScreen();
         } else if ("palitinhos_lobby".equals(currentScreen)) {
             showPalitinhosLobbyScreen();
+        } else if ("palitinhos_start".equals(currentScreen)) {
+            showPalitinhosStartCountdownScreen();
         } else if ("palitinhos_config".equals(currentScreen)) {
             showPalitinhosConfigScreen();
         } else if ("palitinhos_invite".equals(currentScreen)) {
@@ -8064,7 +8193,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
 
         @Override
-        protected void onDraw(Canvas canvas) {
+    protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             float inset = strokeWidth / 2f + 1f;
             bounds.set(inset, inset, getWidth() - inset, getHeight() - inset);
@@ -8643,5 +8772,42 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private String accent() {
         return "#F97316";
+    }
+
+    private final class PalitinhosSticksView extends View {
+        private final int stickCount;
+        private final Paint stickPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        PalitinhosSticksView(Context context, int stickCount) {
+            super(context);
+            this.stickCount = Math.max(0, Math.min(3, stickCount));
+            stickPaint.setColor(color("#D6A15F"));
+            stickPaint.setStrokeCap(Paint.Cap.ROUND);
+            shadowPaint.setColor(color("#7C4A1D"));
+            shadowPaint.setStrokeCap(Paint.Cap.ROUND);
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            if (stickCount <= 0) {
+                return;
+            }
+            float centerX = getWidth() / 2f;
+            float top = getHeight() * 0.14f;
+            float bottom = getHeight() * 0.86f;
+            float gap = dp(13);
+            float stroke = dp(6);
+            stickPaint.setStrokeWidth(stroke);
+            shadowPaint.setStrokeWidth(stroke + dp(1));
+            float start = centerX - ((stickCount - 1) * gap / 2f);
+            for (int i = 0; i < stickCount; i++) {
+                float x = start + (i * gap);
+                canvas.drawLine(x + dp(1), top + dp(1), x + dp(1), bottom + dp(1), shadowPaint);
+                canvas.drawLine(x, top, x, bottom, stickPaint);
+            }
+        }
     }
 }

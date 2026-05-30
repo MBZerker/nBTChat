@@ -1,9 +1,9 @@
 {
-  "versionCode": 64,
-  "versionName": "0.4.42",
+  "versionCode": 65,
+  "versionName": "0.4.43",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.42.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.43.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Remove painel inferior da partida Palitinhos e transforma a mao no controle principal da rodada."
+  "changelog": "Sincroniza inicio do Palitinhos, limpa eventos internos do chat e corrige palitos visuais."
 }
