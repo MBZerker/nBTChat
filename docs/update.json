@@ -1,9 +1,9 @@
 {
-  "versionCode": 62,
-  "versionName": "0.4.40",
+  "versionCode": 63,
+  "versionName": "0.4.41",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.40.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.41.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Silencia notificacoes do chat aberto e melhora conexao/status dos convidados no Palitinhos."
+  "changelog": "Corrige entrada real no lobby do Palitinhos separando convidado que entrou de convidado pronto."
 }

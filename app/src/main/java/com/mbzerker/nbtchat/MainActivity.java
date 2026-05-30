@@ -271,6 +271,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private final int[] palitinhosHands = new int[]{0, 0, 0, 0, 0, 0};
     private final int[] palitinhosGuesses = new int[]{-1, -1, -1, -1, -1, -1};
     private final boolean[] palitinhosReady = new boolean[]{false, false, false, false, false, false};
+    private final boolean[] palitinhosJoined = new boolean[]{true, false, false, false, false, false};
     private final boolean[] palitinhosConfirmed = new boolean[]{false, false, false, false, false, false};
     private final boolean[] palitinhosSpectator = new boolean[]{false, false, false, false, false, false};
     private int palitinhosRoundPhase = 1;
@@ -3030,6 +3031,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         palitinhosInvitees.clear();
         for (int i = 0; i < 6; i++) {
             palitinhosReady[i] = i == 0;
+            palitinhosJoined[i] = i == 0;
             palitinhosConfirmed[i] = false;
             palitinhosSpectator[i] = false;
             palitinhosHands[i] = 0;
@@ -3122,10 +3124,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout row = horizontal();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
-        row.setBackground(rounded("#182420", dp(12), palitinhosReady[index] ? "#16A34A" : "#334155"));
+        String statusText = palitinhosLobbyStatusText(index);
+        String statusColor = palitinhosReady[index] ? "#BBF7D0" : (palitinhosJoined[index] ? "#FACC15" : "#CBD5E1");
+        String borderColor = palitinhosReady[index] ? "#16A34A" : (palitinhosJoined[index] ? "#FACC15" : "#334155");
+        row.setBackground(rounded("#182420", dp(12), borderColor));
         row.addView(text(palitinhosPlayerName(index), 16, "#F8FAFC", Typeface.BOLD), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        row.addView(text(palitinhosReady[index] ? "Pronto" : "Aguardando", 13, palitinhosReady[index] ? "#BBF7D0" : "#CBD5E1", Typeface.BOLD));
+        row.addView(text(statusText, 13, statusColor, Typeface.BOLD));
         return row;
+    }
+
+    private String palitinhosLobbyStatusText(int index) {
+        if (index == 0) {
+            return palitinhosReady[index] ? "Pronto" : "No lobby";
+        }
+        if (!palitinhosJoined[index]) {
+            return "Nao entrou";
+        }
+        return palitinhosReady[index] ? "Pronto" : "No lobby";
     }
 
     private void showPalitinhosInviteScreen() {
@@ -3246,7 +3261,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (palitinhosGameId == null || palitinhosGameId.trim().isEmpty()) {
             palitinhosGameId = messageStore.createId();
         }
+        while (palitinhosInvitees.size() > limit) {
+            palitinhosInvitees.remove(palitinhosInvitees.size() - 1);
+        }
         int invited = Math.min(palitinhosInvitees.size(), limit);
+        for (int i = 1; i < 6; i++) {
+            palitinhosJoined[i] = false;
+            palitinhosReady[i] = false;
+        }
         String body = palitinhosInviteBody("invite");
         long sentAt = System.currentTimeMillis();
         for (int i = 0; i < invited; i++) {
@@ -3254,6 +3276,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             String id = messageStore.createId();
             messageStore.addMessage(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
             sendOrQueueOutgoing(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt);
+            palitinhosJoined[i + 1] = false;
             palitinhosReady[i + 1] = false;
         }
         Toast.makeText(this, invited + " convite(s) enviados.", Toast.LENGTH_SHORT).show();
@@ -3299,6 +3322,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private boolean allPalitinhosReady() {
         for (int i = 0; i < palitinhosPlayers; i++) {
+            if (i > 0 && !palitinhosJoined[i]) {
+                return false;
+            }
             if (!palitinhosReady[i]) {
                 return false;
             }
@@ -5103,10 +5129,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         String detail = "ready".equals(type)
                 ? "Jogador marcou presenca."
-                : hostName + " chamou voce para uma partida.";
+                : ("join".equals(type) ? "Jogador entrou no lobby." : hostName + " chamou voce para uma partida.");
         bubble.addView(text(detail, 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL), topMargin(dp(2)));
 
-        if (mine || "ready".equals(type)) {
+        if (mine || !"invite".equals(type)) {
             return;
         }
         Button join = pillButton("Entrar", "#16A34A", "#FFFFFF");
@@ -5138,6 +5164,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
         for (int i = 0; i < 6; i++) {
             palitinhosReady[i] = false;
+            palitinhosJoined[i] = i == 0 || i == 1;
             palitinhosConfirmed[i] = false;
             palitinhosSpectator[i] = false;
             palitinhosHands[i] = 0;
@@ -5873,11 +5900,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (inviteIndex < 0 || inviteIndex + 1 >= palitinhosReady.length) {
             return true;
         }
-        palitinhosReady[inviteIndex + 1] = "ready".equals(type) && json.optBoolean("ready", false);
+        int playerIndex = inviteIndex + 1;
+        palitinhosJoined[playerIndex] = true;
+        palitinhosReady[playerIndex] = "ready".equals(type) && json.optBoolean("ready", false);
+        if ("join".equals(type)) {
+            Toast.makeText(this, palitinhosPlayerName(playerIndex) + " entrou no lobby.", Toast.LENGTH_SHORT).show();
+        }
         if ("palitinhos_lobby".equals(currentScreen)) {
             showPalitinhosLobbyScreen();
-        } else {
-            Toast.makeText(this, palitinhosPlayerName(inviteIndex + 1) + " atualizou presenca.", Toast.LENGTH_SHORT).show();
+        } else if (!"join".equals(type)) {
+            Toast.makeText(this, palitinhosPlayerName(playerIndex) + " atualizou presenca.", Toast.LENGTH_SHORT).show();
         }
         return true;
     }
