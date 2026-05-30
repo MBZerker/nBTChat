@@ -1,9 +1,9 @@
 {
-  "versionCode": 63,
-  "versionName": "0.4.41",
+  "versionCode": 64,
+  "versionName": "0.4.42",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.41.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.42.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Corrige entrada real no lobby do Palitinhos separando convidado que entrou de convidado pronto."
+  "changelog": "Remove painel inferior da partida Palitinhos e transforma a mao no controle principal da rodada."
 }

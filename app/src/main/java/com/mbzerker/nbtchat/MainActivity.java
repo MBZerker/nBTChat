@@ -3376,15 +3376,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         LinearLayout hud = vertical();
         hud.setGravity(Gravity.CENTER);
-        TextView turn = text(palitinhosPhaseTitle(), 18, "#BBF7D0", Typeface.BOLD);
+        TextView turn = text(palitinhosCenterTitle(), palitinhosRoundPhase == 3 && palitinhosCountdown > 0 ? 92 : 22,
+                palitinhosRoundPhase == 3 && palitinhosCountdown > 0 ? "#FACC15" : "#BBF7D0", Typeface.BOLD);
+        turn.setGravity(Gravity.CENTER);
+        if (palitinhosRoundPhase == 2 && palitinhosTurn == 0) {
+            turn.setOnClickListener(v -> showPalitinhosGuessDialog());
+        }
         hud.addView(turn);
-        TextView hint = text(palitinhosPhaseHint(), 13, "#CBD5E1", Typeface.NORMAL);
-        hint.setGravity(Gravity.CENTER);
-        hud.addView(hint, topMargin(dp(4)));
-        if (palitinhosRoundPhase == 3 && palitinhosCountdown > 0) {
-            TextView countdown = text(String.valueOf(palitinhosCountdown), 88, "#FACC15", Typeface.BOLD);
-            countdown.setGravity(Gravity.CENTER);
-            hud.addView(countdown, topMargin(dp(8)));
+        String hintText = palitinhosCenterHint();
+        if (!hintText.isEmpty()) {
+            TextView hint = text(hintText, 14, "#CBD5E1", Typeface.NORMAL);
+            hint.setGravity(Gravity.CENTER);
+            if (palitinhosRoundPhase == 2 && palitinhosTurn == 0) {
+                hint.setOnClickListener(v -> showPalitinhosGuessDialog());
+            }
+            hud.addView(hint, topMargin(dp(5)));
         }
         FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         root.addView(hud, hudParams);
@@ -3401,45 +3407,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             root.addView(palitinhosHandView(i), handPosition(gravities[i]));
         }
 
-        LinearLayout bottom = vertical();
-        bottom.setPadding(dp(12), dp(10), dp(12), dp(10));
-        bottom.setBackground(rounded("#CC08110F", dp(16), "#284238"));
-        TextView mine = text("Toque na sua mao para escolher: " + palitinhosHands[0], 15, "#F8FAFC", Typeface.BOLD);
-        bottom.addView(mine);
-        LinearLayout controls = horizontal();
-        controls.setGravity(Gravity.CENTER_VERTICAL);
-        if (palitinhosRoundPhase == 1 && !palitinhosConfirmed[0]) {
-            Button confirm = pillButton("Confirmar mao", "#16A34A", "#FFFFFF");
-            confirm.setOnClickListener(v -> {
-                palitinhosConfirmed[0] = true;
-                simulatePalitinhosHandsIfNeeded();
-                if (allPalitinhosHandsConfirmed()) {
-                    palitinhosRoundPhase = 2;
-                }
-                showPalitinhosScreen();
-            });
-            LinearLayout.LayoutParams confirmParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
-            confirmParams.setMargins(dp(8), 0, 0, 0);
-            controls.addView(confirm, confirmParams);
-        } else if (palitinhosRoundPhase == 2) {
-            Button guess = pillButton("Dar palpite", "#2563EB", "#FFFFFF");
-            guess.setOnClickListener(v -> showPalitinhosGuessDialog());
-            controls.addView(guess, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        } else {
-            Button next = pillButton(palitinhosRoundPhase == 3 ? "Revelar / continuar" : "Nova rodada", "#16A34A", "#FFFFFF");
-            next.setOnClickListener(v -> advancePalitinhosReveal());
-            controls.addView(next, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        }
-        bottom.addView(controls, topMargin(dp(8)));
-        TextView bt = text("Chat da partida: toque aqui para abrir as mensagens da mesa.", 11, "#94A3B8", Typeface.NORMAL);
-        bt.setOnClickListener(v -> showPalitinhosChatDialog());
-        bt.setGravity(Gravity.CENTER);
-        bottom.addView(bt, topMargin(dp(6)));
-        FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
-        root.addView(bottom, bottomParams);
-
         setContentView(root);
         requestInsets(root);
+        schedulePalitinhosAutoAdvance();
+        schedulePalitinhosAutoGuessIfNeeded();
     }
 
     private FrameLayout.LayoutParams handPosition(int[] spec) {
@@ -3451,6 +3422,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private View palitinhosHandView(int index) {
         FrameLayout wrap = new FrameLayout(this);
         wrap.setAlpha(palitinhosSpectator[index] ? 0.42f : 1f);
+        if (palitinhosRoundPhase == 3 && palitinhosRevealCount >= palitinhosPlayers) {
+            wrap.setBackground(rounded(palitinhosWinner(index) ? "#3322C55E" : "#66000000", dp(22),
+                    palitinhosWinner(index) ? "#22C55E" : "#334155"));
+        }
         LinearLayout stack = vertical();
         stack.setGravity(Gravity.CENTER);
         ImageView hand = new ImageView(this);
@@ -3477,6 +3452,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 palitinhosHands[0] = (palitinhosHands[0] + 1) % 4;
                 showPalitinhosScreen();
             });
+            wrap.setOnLongClickListener(v -> {
+                confirmPalitinhosHand();
+                return true;
+            });
+        } else if (palitinhosRoundPhase == 2 && index == 0 && palitinhosTurn == 0 && !palitinhosSpectator[0]) {
+            wrap.setOnClickListener(v -> showPalitinhosGuessDialog());
         }
         return wrap;
     }
@@ -3530,7 +3511,59 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "J" + (index + 1);
     }
 
+    private void confirmPalitinhosHand() {
+        if (palitinhosRoundPhase != 1 || palitinhosConfirmed[0]) {
+            return;
+        }
+        palitinhosConfirmed[0] = true;
+        simulatePalitinhosHandsIfNeeded();
+        if (allPalitinhosHandsConfirmed()) {
+            palitinhosRoundPhase = 2;
+        }
+        showPalitinhosScreen();
+    }
+
+    private String palitinhosCenterTitle() {
+        if (palitinhosRoundPhase == 1) {
+            return palitinhosConfirmed[0] ? "Mao confirmada" : "Palitos: " + palitinhosHands[0];
+        }
+        if (palitinhosRoundPhase == 2) {
+            return palitinhosTurn == 0 ? "Sua vez" : "Palpite de " + palitinhosPlayerName(palitinhosTurn);
+        }
+        if (palitinhosCountdown > 0) {
+            return String.valueOf(palitinhosCountdown);
+        }
+        if (palitinhosRevealCount < palitinhosPlayers) {
+            return "Abrindo maos...";
+        }
+        return "Total: " + palitinhosTotal();
+    }
+
+    private String palitinhosCenterHint() {
+        if (palitinhosRoundPhase == 1) {
+            return palitinhosConfirmed[0]
+                    ? "Aguardando jogadores..."
+                    : "Toque na mao para escolher • Segure para confirmar";
+        }
+        if (palitinhosRoundPhase == 2) {
+            return palitinhosTurn == 0
+                    ? "Toque aqui ou na sua mao para dar palpite"
+                    : "Aguardando " + palitinhosPlayerName(palitinhosTurn);
+        }
+        if (palitinhosCountdown > 0) {
+            return "";
+        }
+        if (palitinhosRevealCount < palitinhosPlayers) {
+            return "As maos abrem no sentido horario.";
+        }
+        return palitinhosWinnersText();
+    }
+
     private void showPalitinhosGuessDialog() {
+        if (palitinhosRoundPhase != 2 || palitinhosTurn != 0 || palitinhosSpectator[0]) {
+            Toast.makeText(this, "Aguarde sua vez de dar palpite.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         String[] values = new String[palitinhosPlayers * 3 + 1];
         for (int i = 0; i < values.length; i++) {
             values[i] = String.valueOf(i);
@@ -3550,6 +3583,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     showPalitinhosScreen();
                 })
                 .show();
+    }
+
+    private void schedulePalitinhosAutoGuessIfNeeded() {
+        if (!"palitinhos".equals(currentScreen) || palitinhosRoundPhase != 2 || palitinhosTurn == 0 || palitinhosTurn < 0) {
+            return;
+        }
+        uiHandler.postDelayed(() -> {
+            if (!"palitinhos".equals(currentScreen) || palitinhosRoundPhase != 2 || palitinhosTurn == 0 || palitinhosTurn < 0) {
+                return;
+            }
+            // TODO: substituir por sincronizacao Bluetooth real de palpites dos outros jogadores.
+            palitinhosGuesses[palitinhosTurn] = new Random().nextInt((palitinhosPlayers * 3) + 1);
+            if (allPalitinhosGuessed()) {
+                palitinhosRoundPhase = 3;
+                palitinhosCountdown = 3;
+                palitinhosRevealCount = 0;
+            } else {
+                palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
+            }
+            showPalitinhosScreen();
+        }, 900L);
     }
 
     private String palitinhosPhaseTitle() {
@@ -3639,16 +3693,20 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private String palitinhosWinnersText() {
         int total = palitinhosTotal();
-        ArrayList<Integer> winners = new ArrayList<>();
+        ArrayList<String> winners = new ArrayList<>();
         for (int i = 0; i < palitinhosPlayers; i++) {
             if (!palitinhosSpectator[i] && palitinhosGuesses[i] == total) {
-                winners.add(i + 1);
+                winners.add(palitinhosPlayerName(i));
             }
         }
         if (winners.isEmpty()) {
-            return "Ninguem acertou. Total: " + total;
+            return "Ninguem acertou";
         }
-        return "Acertou: J" + TextUtils.join(", J", winners) + "  Total: " + total;
+        return "Acertou: " + TextUtils.join(", ", winners);
+    }
+
+    private boolean palitinhosWinner(int index) {
+        return !palitinhosSpectator[index] && palitinhosGuesses[index] == palitinhosTotal();
     }
 
     private void advancePalitinhosReveal() {
