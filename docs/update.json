@@ -1,9 +1,9 @@
 {
-  "versionCode": 66,
-  "versionName": "0.4.44",
+  "versionCode": 67,
+  "versionName": "0.4.45",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.44.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.45.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Palitinhos passa a usar host autoritativo para entrada, mao, palpite e revelacao, removendo simulacao local de adversarios."
+  "changelog": "Palitinhos ganha meta de pontuacao 1x1, fim de partida sincronizado e mao local sempre embaixo."
 }

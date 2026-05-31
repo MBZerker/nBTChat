@@ -279,6 +279,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private int palitinhosCountdown = 0;
     private int palitinhosRevealCount = 0;
     private int palitinhosHandTimeSeconds = 15;
+    private int palitinhosTargetScore = 2;
+    private boolean palitinhosMatchOver = false;
+    private int palitinhosWinnerIndex = -1;
     private String palitinhosChatDraft = "";
     private final ArrayList<String> palitinhosInvitees = new ArrayList<>();
     private boolean palitinhosHostMode = true;
@@ -2997,6 +3000,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }));
         root.addView(timeRow, topMargin(dp(8)));
 
+        root.addView(label("Pontuacao 1x1"));
+        LinearLayout scoreRow = horizontal();
+        scoreRow.setGravity(Gravity.CENTER_VERTICAL);
+        scoreRow.addView(palitinhosTargetScoreButton("Melhor de 3", 2), new LinearLayout.LayoutParams(0, dp(50), 1));
+        LinearLayout.LayoutParams scoreGap = new LinearLayout.LayoutParams(0, dp(50), 1);
+        scoreGap.setMargins(dp(8), 0, 0, 0);
+        scoreRow.addView(palitinhosTargetScoreButton("Melhor de 5", 3), scoreGap);
+        LinearLayout.LayoutParams tenGap = new LinearLayout.LayoutParams(0, dp(50), 1);
+        tenGap.setMargins(dp(8), 0, 0, 0);
+        scoreRow.addView(palitinhosTargetScoreButton("Ate 10 pontos", 10), tenGap);
+        root.addView(scoreRow, topMargin(dp(8)));
+
         root.addView(label("Skins"));
         LinearLayout skins = horizontal();
         skins.setGravity(Gravity.CENTER_VERTICAL);
@@ -3026,6 +3041,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         setContentView(scrollView);
         requestInsets(root);
+    }
+
+    private Button palitinhosTargetScoreButton(String title, int targetScore) {
+        boolean active = palitinhosTargetScore == targetScore;
+        Button button = pillButton(title, active ? "#16A34A" : surfaceAlt(), active ? "#FFFFFF" : primary());
+        button.setTextSize(11);
+        button.setOnClickListener(v -> {
+            palitinhosTargetScore = targetScore;
+            showPalitinhosConfigScreen();
+        });
+        return button;
     }
 
     private View palitinhosSkinSlot(String title, int drawableId, boolean active) {
@@ -3064,6 +3090,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         palitinhosCountdown = 0;
         palitinhosRevealCount = 0;
         palitinhosTurn = -1;
+        palitinhosMatchOver = false;
+        palitinhosWinnerIndex = -1;
     }
 
     private void showPalitinhosLobbyScreen() {
@@ -3326,6 +3354,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             json.put("players", palitinhosPlayers);
             json.put("handTimeSeconds", palitinhosHandTimeSeconds);
             json.put("turn", palitinhosTurn);
+            json.put("targetScore", palitinhosTargetScore);
             return json.toString();
         } catch (JSONException ignored) {
             return "";
@@ -3349,6 +3378,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             json.put("countdown", 3);
             json.put("playerIndex", playerIndex);
             json.put("round", palitinhosRoundNumber);
+            json.put("targetScore", palitinhosTargetScore);
             return json.toString();
         } catch (JSONException ignored) {
             return "";
@@ -3380,6 +3410,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         json.put("gameId", palitinhosGameId == null ? "" : palitinhosGameId);
         json.put("playerIndex", localPalitinhosPlayerIndex);
         json.put("round", palitinhosRoundNumber);
+        json.put("targetScore", palitinhosTargetScore);
         return json;
     }
 
@@ -3417,6 +3448,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void preparePalitinhosRound(boolean firstRound) {
+        palitinhosMatchOver = false;
+        palitinhosWinnerIndex = -1;
         palitinhosRoundNumber++;
         for (int i = 0; i < palitinhosPlayers; i++) {
             palitinhosHands[i] = 0;
@@ -3495,6 +3528,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             turn.setOnClickListener(v -> showPalitinhosGuessDialog());
         }
         hud.addView(turn);
+        String scoreText = palitinhosScoreboardText();
+        if (!scoreText.isEmpty()) {
+            TextView score = text(scoreText, 13, "#E2E8F0", Typeface.BOLD);
+            score.setGravity(Gravity.CENTER);
+            hud.addView(score, topMargin(dp(5)));
+        }
         String hintText = palitinhosCenterHint();
         if (!hintText.isEmpty()) {
             TextView hint = text(hintText, 14, "#CBD5E1", Typeface.NORMAL);
@@ -3503,6 +3542,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 hint.setOnClickListener(v -> showPalitinhosGuessDialog());
             }
             hud.addView(hint, topMargin(dp(5)));
+        }
+        if (palitinhosMatchOver && palitinhosHostMode) {
+            Button restart = pillButton("Nova partida", "#16A34A", "#FFFFFF");
+            restart.setTextSize(12);
+            restart.setOnClickListener(v -> restartPalitinhosMatchFromHost());
+            hud.addView(restart, topMargin(dp(10)));
         }
         FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         root.addView(hud, hudParams);
@@ -3516,7 +3561,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 {Gravity.TOP | Gravity.RIGHT, 0, 48, -64, 0, -90},
         };
         for (int i = 0; i < palitinhosPlayers; i++) {
-            root.addView(palitinhosHandView(i), handPosition(gravities[i]));
+            int visualSlot = palitinhosVisualSlotForPlayer(i);
+            root.addView(palitinhosHandView(i, visualSlot), handPosition(gravities[visualSlot]));
         }
 
         setContentView(root);
@@ -3530,7 +3576,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return params;
     }
 
-    private View palitinhosHandView(int index) {
+    private View palitinhosHandView(int index, int visualSlot) {
         FrameLayout wrap = new FrameLayout(this);
         wrap.setAlpha(palitinhosSpectator[index] ? 0.42f : 1f);
         if (palitinhosRoundPhase == 3 && palitinhosRevealCount >= palitinhosPlayers) {
@@ -3544,7 +3590,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         boolean revealed = choosingMine || (palitinhosRoundPhase == 3 && index < palitinhosRevealCount);
         hand.setImageResource(revealed ? R.drawable.palitinhos_hand_open : R.drawable.palitinhos_hand_fist);
         hand.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        hand.setRotation(palitinhosHandRotation(index));
+        hand.setRotation(palitinhosHandRotationForVisualSlot(visualSlot));
         stack.addView(hand, new LinearLayout.LayoutParams(dp(178), dp(198)));
         TextView name = text("J" + (index + 1) + "  " + palitinhosPlayerStatus(index), 13,
                 index == palitinhosTurn ? "#BBF7D0" : "#E2E8F0", Typeface.BOLD);
@@ -3571,8 +3617,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return wrap;
     }
 
-    private float palitinhosHandRotation(int index) {
-        switch (index) {
+    private int palitinhosVisualSlotForPlayer(int playerIndex) {
+        if (playerIndex == localPalitinhosPlayerIndex) {
+            return 0;
+        }
+        int visual = 1;
+        for (int step = 1; step < palitinhosPlayers; step++) {
+            int candidate = (localPalitinhosPlayerIndex + step) % palitinhosPlayers;
+            if (candidate == playerIndex) {
+                return Math.min(5, visual);
+            }
+            visual++;
+        }
+        return Math.min(5, playerIndex);
+    }
+
+    private float palitinhosHandRotationForVisualSlot(int slot) {
+        switch (slot) {
             case 1:
                 return 180f;
             case 2:
@@ -3640,6 +3701,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private String palitinhosCenterTitle() {
+        if (palitinhosMatchOver && palitinhosWinnerIndex >= 0) {
+            return palitinhosPlayerName(palitinhosWinnerIndex) + " venceu!";
+        }
         if (palitinhosRoundPhase == 1) {
             return palitinhosConfirmed[localPalitinhosPlayerIndex] ? "Mao confirmada" : "Palitos: " + palitinhosHands[localPalitinhosPlayerIndex];
         }
@@ -3656,6 +3720,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private String palitinhosCenterHint() {
+        if (palitinhosMatchOver) {
+            return "Placar final: " + palitinhosScoreboardText();
+        }
         if (palitinhosRoundPhase == 1) {
             return palitinhosConfirmed[localPalitinhosPlayerIndex]
                     ? "Aguardando jogadores..."
@@ -3673,6 +3740,19 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return "As maos abrem no sentido horario.";
         }
         return palitinhosWinnersText();
+    }
+
+    private String palitinhosScoreboardText() {
+        if (palitinhosPlayers == 2) {
+            return "Placar: " + palitinhosPlayerName(0) + " " + palitinhosScores[0]
+                    + " x " + palitinhosScores[1] + " " + palitinhosPlayerName(1)
+                    + " • alvo " + palitinhosTargetScore;
+        }
+        ArrayList<String> parts = new ArrayList<>();
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            parts.add(palitinhosPlayerName(i) + " " + palitinhosScores[i]);
+        }
+        return "Placar: " + TextUtils.join(" • ", parts);
     }
 
     private void showPalitinhosGuessDialog() {
@@ -3774,6 +3854,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             json.put("hands", intArrayJson(palitinhosHands));
             json.put("guesses", intArrayJson(palitinhosGuesses));
             json.put("scores", intArrayJson(palitinhosScores));
+            json.put("targetScore", palitinhosTargetScore);
             json.put("total", palitinhosTotal());
             broadcastPalitinhosEvent(json.toString());
         } catch (JSONException ignored) {
@@ -3791,9 +3872,44 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             json.put("handTimeSeconds", palitinhosHandTimeSeconds);
             json.put("turn", palitinhosTurn);
             json.put("scores", intArrayJson(palitinhosScores));
+            json.put("targetScore", palitinhosTargetScore);
             broadcastPalitinhosEvent(json.toString());
         } catch (JSONException ignored) {
         }
+    }
+
+    private void broadcastPalitinhosMatchOver() {
+        try {
+            JSONObject json = basePalitinhosEvent("match_over");
+            json.put("winnerIndex", palitinhosWinnerIndex);
+            json.put("scores", intArrayJson(palitinhosScores));
+            json.put("targetScore", palitinhosTargetScore);
+            broadcastPalitinhosEvent(json.toString());
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private int palitinhosMatchWinnerIndex() {
+        for (int i = 0; i < palitinhosPlayers; i++) {
+            if (palitinhosScores[i] >= palitinhosTargetScore) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void restartPalitinhosMatchFromHost() {
+        if (!palitinhosHostMode) {
+            return;
+        }
+        for (int i = 0; i < 6; i++) {
+            palitinhosScores[i] = 0;
+            palitinhosSpectator[i] = false;
+        }
+        palitinhosMatchOver = false;
+        palitinhosWinnerIndex = -1;
+        broadcastPalitinhosRoundStart(true);
+        showPalitinhosScreen();
     }
 
     private void broadcastPalitinhosEvent(String body) {
@@ -3994,6 +4110,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         markPalitinhosRoundWinnersOut();
         if (palitinhosHostMode) {
+            palitinhosWinnerIndex = palitinhosMatchWinnerIndex();
+            if (palitinhosWinnerIndex >= 0) {
+                palitinhosMatchOver = true;
+                broadcastPalitinhosMatchOver();
+                showPalitinhosScreen();
+                return;
+            }
             broadcastPalitinhosRoundStart(false);
             showPalitinhosScreen();
         }
@@ -5495,6 +5618,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         palitinhosHostName = safeName(json.optString("hostName", "Host"), "Host");
         palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", 2)));
         palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+        palitinhosTargetScore = Math.max(1, Math.min(50, json.optInt("targetScore", palitinhosTargetScore)));
         localPalitinhosPlayerIndex = Math.max(1, Math.min(5, json.optInt("playerIndex", 1)));
         for (int i = 0; i < 6; i++) {
             palitinhosReady[i] = false;
@@ -6251,8 +6375,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 palitinhosRoomStarted = true;
                 palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", palitinhosPlayers)));
                 palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+                palitinhosTargetScore = Math.max(1, Math.min(50, json.optInt("targetScore", palitinhosTargetScore)));
                 palitinhosTurn = json.optInt("turn", palitinhosTurn);
                 palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
+                palitinhosMatchOver = false;
+                palitinhosWinnerIndex = -1;
                 for (int i = 0; i < 6; i++) {
                     palitinhosHands[i] = 0;
                     palitinhosConfirmed[i] = false;
@@ -6271,6 +6398,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 pendingPalitinhosJoinGameId = "";
                 palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", palitinhosPlayers)));
                 palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+                palitinhosTargetScore = Math.max(1, Math.min(50, json.optInt("targetScore", palitinhosTargetScore)));
                 localPalitinhosPlayerIndex = Math.max(1, Math.min(5, json.optInt("playerIndex", localPalitinhosPlayerIndex)));
                 for (int i = 0; i < 6; i++) {
                     palitinhosJoined[i] = i == 0 || i == localPalitinhosPlayerIndex;
@@ -6302,6 +6430,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if ("phase".equals(type)) {
             if (gameId.equals(palitinhosGameId) && !palitinhosHostMode) {
                 palitinhosRoundPhase = Math.max(1, Math.min(3, json.optInt("phase", palitinhosRoundPhase)));
+                palitinhosTargetScore = Math.max(1, Math.min(50, json.optInt("targetScore", palitinhosTargetScore)));
                 palitinhosTurn = json.optInt("turn", palitinhosTurn);
                 palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
                 readIntArray(json, "guesses", palitinhosGuesses);
@@ -6316,6 +6445,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             if (gameId.equals(palitinhosGameId) && !palitinhosHostMode) {
                 palitinhosRoundPhase = 3;
                 palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
+                palitinhosTargetScore = Math.max(1, Math.min(50, json.optInt("targetScore", palitinhosTargetScore)));
                 palitinhosCountdown = Math.max(0, json.optInt("countdown", 3));
                 palitinhosRevealCount = 0;
                 readIntArray(json, "hands", palitinhosHands);
@@ -6329,8 +6459,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             if (gameId.equals(palitinhosGameId) && !palitinhosHostMode) {
                 palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", palitinhosPlayers)));
                 palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+                palitinhosTargetScore = Math.max(1, Math.min(50, json.optInt("targetScore", palitinhosTargetScore)));
                 palitinhosTurn = json.optInt("turn", palitinhosTurn);
                 palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
+                palitinhosMatchOver = false;
+                palitinhosWinnerIndex = -1;
                 readIntArray(json, "scores", palitinhosScores);
                 for (int i = 0; i < 6; i++) {
                     palitinhosHands[i] = 0;
@@ -6341,6 +6474,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 palitinhosCountdown = 0;
                 palitinhosRevealCount = 0;
                 showPalitinhosScreen();
+            }
+            return true;
+        }
+        if ("match_over".equals(type)) {
+            if (gameId.equals(palitinhosGameId) && !palitinhosHostMode) {
+                palitinhosTargetScore = Math.max(1, Math.min(50, json.optInt("targetScore", palitinhosTargetScore)));
+                palitinhosWinnerIndex = json.optInt("winnerIndex", -1);
+                palitinhosMatchOver = palitinhosWinnerIndex >= 0;
+                readIntArray(json, "scores", palitinhosScores);
+                if ("palitinhos".equals(currentScreen) || "palitinhos_start".equals(currentScreen)) {
+                    showPalitinhosScreen();
+                }
             }
             return true;
         }
@@ -6364,6 +6509,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 reply.put("playerIndex", playerIndex);
                 reply.put("players", palitinhosPlayers);
                 reply.put("handTimeSeconds", palitinhosHandTimeSeconds);
+                reply.put("targetScore", palitinhosTargetScore);
                 if (palitinhosRoomStarted) {
                     reply.put("reason", "started");
                 } else {
