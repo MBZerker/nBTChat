@@ -178,6 +178,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final String PALITINHOS_PREFS = "palitinhos_state";
     private static final String KEY_EXPIRED_PALITINHOS_GAMES = "expired_palitinhos_games";
     private static final String KEY_EXPIRED_STORE_INVITES = "expired_store_invites";
+    private static final int BUBBLE_TAIL_TOP = 1;
+    private static final int BUBBLE_TAIL_BOTTOM = 2;
+    private static final int BUBBLE_TAIL_LEFT = 3;
+    private static final int BUBBLE_TAIL_RIGHT = 4;
 
     private final Map<String, BtChatManager.DeviceCandidate> discoveredDevices = new LinkedHashMap<>();
     private final Map<String, TextView> receiptViews = new LinkedHashMap<>();
@@ -3583,6 +3587,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
 
         FrameLayout root = new FrameLayout(this);
+        root.setClipChildren(false);
+        root.setClipToPadding(false);
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
                 color("#07130F"), color("#10211D"), color("#17202A")
         });
@@ -3645,7 +3651,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
         }
         if (shouldShowPalitinhosGuessStepper()) {
-            FrameLayout.LayoutParams guessParams = new FrameLayout.LayoutParams(dp(210), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            FrameLayout.LayoutParams guessParams = new FrameLayout.LayoutParams(dp(270), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
             guessParams.setMargins(0, 0, 0, dp(204));
             root.addView(palitinhosGuessSliderView(), guessParams);
         }
@@ -3943,12 +3949,36 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private View palitinhosGuessBubbleView(int playerIndex, int visualSlot) {
         String label = palitinhosGuesses[playerIndex] >= 0 ? "Eu escolho " + palitinhosGuesses[playerIndex] : "Eu escolho...";
-        PalitinhosSpeechBubbleView bubble = new PalitinhosSpeechBubbleView(this, label, visualSlot);
-        bubble.setTextColor(Color.WHITE);
+        SpeechBubbleView bubble = new SpeechBubbleView(this, label,
+                palitinhosBubbleDirectionForVisualSlot(visualSlot),
+                palitinhosBubbleTailBiasForVisualSlot(visualSlot),
+                "#F8FAFC", "#14532D", "#14532D");
         bubble.setTextSize(12);
         bubble.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         bubble.setGravity(Gravity.CENTER);
         return bubble;
+    }
+
+    private int palitinhosBubbleDirectionForVisualSlot(int visualSlot) {
+        switch (visualSlot) {
+            case 1:
+                return BUBBLE_TAIL_TOP;
+            case 2:
+            case 4:
+                return BUBBLE_TAIL_LEFT;
+            case 3:
+            case 5:
+                return BUBBLE_TAIL_RIGHT;
+            default:
+                return BUBBLE_TAIL_BOTTOM;
+        }
+    }
+
+    private float palitinhosBubbleTailBiasForVisualSlot(int visualSlot) {
+        if (visualSlot == 4 || visualSlot == 5) {
+            return 0.30f;
+        }
+        return 0.50f;
     }
 
     private FrameLayout.LayoutParams palitinhosGuessBubblePosition(int visualSlot) {
@@ -3956,27 +3986,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         switch (visualSlot) {
             case 1:
                 params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-                params.setMargins(0, dp(126), 0, 0);
+                params.setMargins(0, dp(178), 0, 0);
                 break;
             case 2:
                 params.gravity = Gravity.CENTER_VERTICAL | Gravity.LEFT;
-                params.setMargins(dp(112), 0, 0, dp(116));
+                params.setMargins(dp(118), 0, 0, dp(134));
                 break;
             case 3:
                 params.gravity = Gravity.CENTER_VERTICAL | Gravity.RIGHT;
-                params.setMargins(0, 0, dp(112), dp(116));
+                params.setMargins(0, 0, dp(118), dp(134));
                 break;
             case 4:
                 params.gravity = Gravity.TOP | Gravity.LEFT;
-                params.setMargins(dp(92), dp(194), 0, 0);
+                params.setMargins(dp(112), dp(164), 0, 0);
                 break;
             case 5:
                 params.gravity = Gravity.TOP | Gravity.RIGHT;
-                params.setMargins(0, dp(194), dp(92), 0);
+                params.setMargins(0, dp(164), dp(112), 0);
                 break;
             default:
                 params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-                params.setMargins(0, 0, 0, dp(214));
+                params.setMargins(0, 0, 0, dp(236));
                 break;
         }
         return params;
@@ -3985,7 +4015,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private View palitinhosGuessSliderView() {
         LinearLayout box = vertical();
         box.setGravity(Gravity.CENTER);
-        box.setPadding(dp(10), dp(8), dp(10), dp(8));
+        box.setClipChildren(false);
+        box.setClipToPadding(false);
+        box.setPadding(dp(18), dp(8), dp(18), dp(8));
         box.setBackground(rounded("#CC0F172A", dp(18), "#16A34A"));
         int minGuess = palitinhosMinGuess();
         int maxGuess = palitinhosMaxGuess();
@@ -4000,7 +4032,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         slider.setProgressDrawable(palitinhosSliderTrackDrawable());
         slider.setThumb(palitinhosSliderThumbDrawable());
         slider.setSplitTrack(false);
-        slider.setPadding(dp(10), dp(10), dp(10), dp(10));
+        slider.setPadding(dp(26), dp(12), dp(26), dp(12));
+        slider.setThumbOffset(dp(17));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             slider.setProgressTintList(null);
             slider.setThumbTintList(null);
@@ -4028,7 +4061,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             public void onStopTrackingTouch(SeekBar seekBar) {
             }
         });
-        box.addView(slider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)));
+        box.addView(slider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(54)));
         TextView help = text("Toque no numero ou na mao para confirmar", 11, "#CBD5E1", Typeface.BOLD);
         help.setGravity(Gravity.CENTER);
         box.addView(help, topMargin(dp(4)));
@@ -4058,7 +4091,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private Drawable palitinhosSliderThumbDrawable() {
-        int size = dp(38);
+        int size = dp(34);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -9766,59 +9799,74 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
-    private final class PalitinhosSpeechBubbleView extends TextView {
-        private final int visualSlot;
+    private final class SpeechBubbleView extends TextView {
+        private final int tailDirection;
+        private final float tailBias;
         private final Paint bubblePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final Path tail = new Path();
+        private final int textColor;
 
-        PalitinhosSpeechBubbleView(Context context, String label, int visualSlot) {
+        SpeechBubbleView(Context context, String label, int tailDirection, float tailBias,
+                         String fillColor, String strokeColor, String textColor) {
             super(context);
-            this.visualSlot = visualSlot;
+            this.tailDirection = tailDirection;
+            this.tailBias = Math.max(0.22f, Math.min(0.78f, tailBias));
+            this.textColor = color(textColor);
             setText(label);
             setWillNotDraw(false);
+            setIncludeFontPadding(false);
             setMinWidth(dp(94));
-            setMinHeight(dp(40));
-            setPadding(dp(12), dp(8), dp(12), dp(10));
-            bubblePaint.setColor(color("#F8FAFC"));
-            strokePaint.setColor(color("#14532D"));
+            setMinHeight(dp(44));
+            setPadding(
+                    tailDirection == BUBBLE_TAIL_LEFT ? dp(20) : dp(12),
+                    tailDirection == BUBBLE_TAIL_TOP ? dp(18) : dp(10),
+                    tailDirection == BUBBLE_TAIL_RIGHT ? dp(20) : dp(12),
+                    tailDirection == BUBBLE_TAIL_BOTTOM ? dp(18) : dp(10));
+            bubblePaint.setColor(color(fillColor));
+            strokePaint.setColor(color(strokeColor));
             strokePaint.setStyle(Paint.Style.STROKE);
             strokePaint.setStrokeWidth(dp(2));
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
-            float tailSize = dp(10);
-            rect.set(dp(2), dp(2), getWidth() - dp(2), getHeight() - dp(8));
+            float tailSize = dp(12);
+            float inset = dp(2);
+            rect.set(inset, inset, getWidth() - inset, getHeight() - inset);
             tail.reset();
-            if (visualSlot == 1) {
-                rect.bottom -= tailSize;
-                tail.moveTo(getWidth() / 2f - tailSize, rect.bottom);
-                tail.lineTo(getWidth() / 2f + tailSize, rect.bottom);
-                tail.lineTo(getWidth() / 2f, rect.bottom + tailSize);
-            } else if (visualSlot == 2) {
-                rect.left += tailSize;
-                tail.moveTo(rect.left, getHeight() / 2f - tailSize);
-                tail.lineTo(rect.left, getHeight() / 2f + tailSize);
-                tail.lineTo(rect.left - tailSize, getHeight() / 2f);
-            } else if (visualSlot == 3) {
-                rect.right -= tailSize;
-                tail.moveTo(rect.right, getHeight() / 2f - tailSize);
-                tail.lineTo(rect.right, getHeight() / 2f + tailSize);
-                tail.lineTo(rect.right + tailSize, getHeight() / 2f);
-            } else {
+            if (tailDirection == BUBBLE_TAIL_TOP) {
                 rect.top += tailSize;
-                tail.moveTo(getWidth() / 2f - tailSize, rect.top);
-                tail.lineTo(getWidth() / 2f + tailSize, rect.top);
-                tail.lineTo(getWidth() / 2f, rect.top - tailSize);
+                float x = rect.left + rect.width() * tailBias;
+                tail.moveTo(x - tailSize, rect.top);
+                tail.lineTo(x + tailSize, rect.top);
+                tail.lineTo(x, rect.top - tailSize);
+            } else if (tailDirection == BUBBLE_TAIL_BOTTOM) {
+                rect.bottom -= tailSize;
+                float x = rect.left + rect.width() * tailBias;
+                tail.moveTo(x - tailSize, rect.bottom);
+                tail.lineTo(x + tailSize, rect.bottom);
+                tail.lineTo(x, rect.bottom + tailSize);
+            } else if (tailDirection == BUBBLE_TAIL_LEFT) {
+                rect.left += tailSize;
+                float y = rect.top + rect.height() * tailBias;
+                tail.moveTo(rect.left, y - tailSize);
+                tail.lineTo(rect.left, y + tailSize);
+                tail.lineTo(rect.left - tailSize, y);
+            } else {
+                rect.right -= tailSize;
+                float y = rect.top + rect.height() * tailBias;
+                tail.moveTo(rect.right, y - tailSize);
+                tail.lineTo(rect.right, y + tailSize);
+                tail.lineTo(rect.right + tailSize, y);
             }
             tail.close();
             canvas.drawRoundRect(rect, dp(14), dp(14), bubblePaint);
             canvas.drawPath(tail, bubblePaint);
             canvas.drawRoundRect(rect, dp(14), dp(14), strokePaint);
             canvas.drawPath(tail, strokePaint);
-            setTextColor(color("#14532D"));
+            setTextColor(textColor);
             super.onDraw(canvas);
         }
     }
