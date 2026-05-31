@@ -311,6 +311,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private int palitinhosLastScoredRound = -1;
     private String palitinhosChatDraft = "";
     private final ArrayList<String> palitinhosInvitees = new ArrayList<>();
+    private final Map<String, Long> palitinhosInviteWakeAt = new HashMap<>();
+    private Runnable palitinhosInviteWakeRunnable;
+    private int palitinhosInviteWakeIndex;
     private boolean palitinhosHostMode = true;
     private String palitinhosGameId = "";
     private String palitinhosHostAddress = "";
@@ -1931,8 +1934,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (conversation.lastBody != null && !conversation.lastBody.isEmpty()) {
             return suffix + conversation.lastBody;
         }
-        if (profile != null && !profile.getStatus().isEmpty()) {
-            return suffix + profile.getStatus();
+        String profileStatus = publicProfileStatus(profile);
+        if (!profileStatus.isEmpty()) {
+            return suffix + profileStatus;
         }
         return suffix + "Toque para abrir a conversa";
     }
@@ -1954,6 +1958,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return AppSettingsStore.PRESENCE_ONLINE;
         }
         return AppSettingsStore.PRESENCE_INVISIBLE;
+    }
+
+    private String publicProfileStatus(UserProfile profile) {
+        if (profile == null || profile.getStatus() == null) {
+            return "";
+        }
+        String status = profile.getStatus().trim();
+        return isPrivatePresenceText(status) ? "" : status;
+    }
+
+    private boolean isPrivatePresenceText(String value) {
+        if (value == null) {
+            return false;
+        }
+        String clean = searchable(value);
+        return "invisivel".equals(clean)
+                || "invisible".equals(clean)
+                || "offline".equals(clean)
+                || "ocupado".equals(clean)
+                || "busy".equals(clean)
+                || "online".equals(clean);
     }
 
     private boolean isRemoteTyping(String address) {
@@ -3184,6 +3209,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showPalitinhosLobbyScreen() {
+        stopPalitinhosInviteWakeLoop();
         currentScreen = "palitinhos_lobby";
         probePalitinhosConnections();
         ScrollView scrollView = new ScrollView(this);
@@ -3226,11 +3252,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
 
         if (palitinhosHostMode) {
-            int inviteLimit = Math.max(0, palitinhosPlayers - 1);
+            int inviteLimit = palitinhosGuestSlotLimit();
             while (palitinhosInvitees.size() > inviteLimit) {
                 palitinhosInvitees.remove(palitinhosInvitees.size() - 1);
             }
-            boolean slotsFull = palitinhosInvitees.size() >= inviteLimit;
+            boolean slotsFull = palitinhosAllGuestSlotsFilled();
             Button invite = pillButton(slotsFull ? "Slots preenchidos" : "Convidar", slotsFull ? "#475569" : "#16A34A", "#FFFFFF");
             invite.setTextSize(15);
             invite.setEnabled(!slotsFull);
@@ -3270,6 +3296,26 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         setContentView(scrollView);
         requestInsets(root);
+    }
+
+    private int palitinhosGuestSlotLimit() {
+        return Math.max(0, palitinhosPlayers - 1);
+    }
+
+    private int palitinhosJoinedGuestCount() {
+        int count = 0;
+        int limit = palitinhosGuestSlotLimit();
+        for (int i = 1; i <= limit && i < palitinhosJoined.length; i++) {
+            if (palitinhosJoined[i]) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private boolean palitinhosAllGuestSlotsFilled() {
+        int limit = palitinhosGuestSlotLimit();
+        return limit > 0 && palitinhosJoinedGuestCount() >= limit;
     }
 
     private View palitinhosLobbyPlayerRow(int index) {
@@ -3322,17 +3368,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             root.addView(text("Nenhum contato pareado para convidar.", 14, secondary(), Typeface.BOLD), topMargin(dp(18)));
         } else {
             for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
-                connectForPalitinhosStatus(entry.getKey());
                 root.addView(palitinhosInviteRow(entry.getKey(), entry.getValue()), topMargin(dp(8)));
             }
         }
         setContentView(scrollView);
         requestInsets(root);
+        startPalitinhosInviteWakeLoop();
     }
 
     private View palitinhosInviteRow(String address, UserProfile profile) {
         String name = profile.isComplete() ? profile.getDisplayName() : safeName(address, "Contato");
         boolean selected = palitinhosInvitees.contains(address);
+        boolean joined = palitinhosInviteeJoined(address);
         LinearLayout row = horizontal();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -3348,15 +3395,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         labelParams.setMargins(dp(12), 0, 0, 0);
         row.addView(label, labelParams);
         String presence = contactPresenceStatus(address);
-        String statusText = homePresenceConnecting.contains(address) ? "Conectando" : presenceLabel(presence);
-        TextView status = text((selected ? "Selecionado\n" : "") + statusText, 12,
+        String statusText = homePresenceConnecting.contains(address) ? "Conectando" : publicPresenceLabel(presence);
+        String prefix = joined ? "Na sala\n" : (selected ? "Selecionado\n" : "");
+        TextView status = text(prefix + statusText, 12,
                 homePresenceConnecting.contains(address) ? "#FACC15" : presenceColor(presence), Typeface.BOLD);
         status.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         row.addView(status);
         row.setOnClickListener(v -> {
             int limit = Math.max(0, palitinhosPlayers - 1);
             if (palitinhosInvitees.contains(address)) {
-                palitinhosInvitees.remove(address);
+                removePalitinhosInvitee(address);
             } else if (palitinhosInvitees.size() < limit) {
                 palitinhosInvitees.add(address);
             } else {
@@ -3365,6 +3413,37 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showPalitinhosInviteScreen();
         });
         return row;
+    }
+
+    private boolean palitinhosInviteeJoined(String address) {
+        int index = palitinhosInvitees.indexOf(address);
+        return index >= 0 && index + 1 < palitinhosJoined.length && palitinhosJoined[index + 1];
+    }
+
+    private void removePalitinhosInvitee(String address) {
+        int index = palitinhosInvitees.indexOf(address);
+        if (index < 0) {
+            return;
+        }
+        palitinhosInvitees.remove(index);
+        int slot = index + 1;
+        for (int i = slot; i < palitinhosJoined.length - 1; i++) {
+            palitinhosJoined[i] = palitinhosJoined[i + 1];
+            palitinhosReady[i] = palitinhosReady[i + 1];
+            palitinhosConfirmed[i] = palitinhosConfirmed[i + 1];
+            palitinhosHands[i] = palitinhosHands[i + 1];
+            palitinhosGuesses[i] = palitinhosGuesses[i + 1];
+            palitinhosScores[i] = palitinhosScores[i + 1];
+            palitinhosSpectator[i] = palitinhosSpectator[i + 1];
+        }
+        int last = palitinhosJoined.length - 1;
+        palitinhosJoined[last] = false;
+        palitinhosReady[last] = false;
+        palitinhosConfirmed[last] = false;
+        palitinhosHands[last] = 0;
+        palitinhosGuesses[last] = -1;
+        palitinhosScores[last] = 0;
+        palitinhosSpectator[last] = false;
     }
 
     private void probePalitinhosConnections() {
@@ -3404,8 +3483,68 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }, 3500L);
     }
 
+    private void startPalitinhosInviteWakeLoop() {
+        if (!"palitinhos_invite".equals(currentScreen)) {
+            return;
+        }
+        if (palitinhosInviteWakeRunnable == null) {
+            palitinhosInviteWakeRunnable = this::runPalitinhosInviteWakeStep;
+        }
+        uiHandler.removeCallbacks(palitinhosInviteWakeRunnable);
+        uiHandler.postDelayed(palitinhosInviteWakeRunnable, 350L);
+    }
+
+    private void stopPalitinhosInviteWakeLoop() {
+        if (palitinhosInviteWakeRunnable != null) {
+            uiHandler.removeCallbacks(palitinhosInviteWakeRunnable);
+        }
+        palitinhosInviteWakeIndex = 0;
+    }
+
+    private void runPalitinhosInviteWakeStep() {
+        if (!"palitinhos_invite".equals(currentScreen) || btChatManager == null) {
+            stopPalitinhosInviteWakeLoop();
+            return;
+        }
+        ArrayList<String> targets = palitinhosInviteWakeTargets();
+        if (!targets.isEmpty()) {
+            long now = System.currentTimeMillis();
+            int size = targets.size();
+            for (int attempts = 0; attempts < size; attempts++) {
+                String address = targets.get(palitinhosInviteWakeIndex % size);
+                palitinhosInviteWakeIndex = (palitinhosInviteWakeIndex + 1) % size;
+                Long last = palitinhosInviteWakeAt.get(address);
+                boolean recent = last != null && now - last < 7000L;
+                if (!recent && !homePresenceConnecting.contains(address)
+                        && !profileStore.isBlocked(address)
+                        && !btChatManager.canSendTo(address)
+                        && !btChatManager.isConnectedTo(address)) {
+                    palitinhosInviteWakeAt.put(address, now);
+                    connectForPalitinhosStatus(address);
+                    break;
+                }
+            }
+        }
+        uiHandler.postDelayed(palitinhosInviteWakeRunnable, 1800L);
+    }
+
+    private ArrayList<String> palitinhosInviteWakeTargets() {
+        ArrayList<String> targets = new ArrayList<>();
+        for (String address : palitinhosInvitees) {
+            if (address != null && !address.trim().isEmpty() && !targets.contains(address)) {
+                targets.add(address);
+            }
+        }
+        for (String address : profileStore.loadContacts().keySet()) {
+            if (address != null && !address.trim().isEmpty() && !targets.contains(address)) {
+                targets.add(address);
+            }
+        }
+        return targets;
+    }
+
     private void sendPalitinhosInvites() {
-        int limit = Math.max(0, palitinhosPlayers - 1);
+        int limit = palitinhosGuestSlotLimit();
         if (palitinhosInvitees.isEmpty()) {
             Toast.makeText(this, "Selecione pelo menos um contato.", Toast.LENGTH_SHORT).show();
             return;
@@ -3417,7 +3556,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             palitinhosInvitees.remove(palitinhosInvitees.size() - 1);
         }
         int invited = Math.min(palitinhosInvitees.size(), limit);
-        for (int i = 1; i < 6; i++) {
+        for (int i = invited + 1; i < 6; i++) {
             palitinhosJoined[i] = false;
             palitinhosReady[i] = false;
         }
@@ -3428,8 +3567,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             String id = messageStore.createId();
             messageStore.addMessage(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
             sendOrQueueOutgoing(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt);
-            palitinhosJoined[i + 1] = false;
-            palitinhosReady[i + 1] = false;
         }
         Toast.makeText(this, invited + " convite(s) enviados.", Toast.LENGTH_SHORT).show();
         showPalitinhosLobbyScreen();
@@ -7105,7 +7242,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (chatConnectionIcon != null) {
             chatConnectionIcon.setImageResource(presenceDrawable(presence));
-            chatConnectionIcon.setContentDescription(presenceLabel(presence));
+            chatConnectionIcon.setContentDescription(publicPresenceLabel(presence));
             chatConnectionIcon.setBackground(rounded("#FFFFFF", dp(11), "#FFFFFF"));
         }
         updateChatAvatarSpin();
@@ -7170,7 +7307,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 subtitle = "Por perto";
                 subtitleColor = "#16A34A";
             } else {
-                subtitle = currentRemoteProfile.getStatus().isEmpty() ? "Bluetooth seguro" : currentRemoteProfile.getStatus();
+                String profileStatus = publicProfileStatus(currentRemoteProfile);
+                subtitle = profileStatus.isEmpty() ? "Bluetooth seguro" : profileStatus;
             }
             chatSubtitleText.setText(subtitle);
             chatSubtitleText.setTextColor(color(subtitleColor));
@@ -9256,7 +9394,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             status.setTag("presence");
             status.setImageResource(presenceDrawable(presence));
             status.setBackground(ovalStroke("#FFFFFF", "#FFFFFF", dp(1)));
-            status.setContentDescription(presenceLabel(presence));
+            status.setContentDescription(publicPresenceLabel(presence));
             FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(dp(19), dp(19), Gravity.RIGHT | Gravity.BOTTOM);
             statusParams.setMargins(0, 0, 0, 0);
             frame.addView(status, statusParams);
@@ -9845,6 +9983,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return "Online";
         }
         return "Invisivel";
+    }
+
+    private String publicPresenceLabel(String presence) {
+        if (AppSettingsStore.PRESENCE_BUSY.equals(presence) || "busy".equals(presence)) {
+            return "Ocupado";
+        }
+        if (AppSettingsStore.PRESENCE_ONLINE.equals(presence) || "online".equals(presence)) {
+            return "Online";
+        }
+        return "Offline";
     }
 
     private String presenceColor(String presence) {

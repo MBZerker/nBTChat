@@ -1,9 +1,9 @@
 {
-  "versionCode": 72,
-  "versionName": "0.4.50",
+  "versionCode": 73,
+  "versionName": "0.4.51",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.50.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.51.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Torna download de atualizacao persistente, retomavel e resistente a permissao/tela apagada."
+  "changelog": "Melhora convites Palitinhos com tentativa serial de conexao, corrige slots do lobby e evita vazamento de status invisivel."
 }
