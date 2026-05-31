@@ -270,6 +270,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private int palitinhosGuess = 0;
     private final int[] palitinhosHands = new int[]{0, 0, 0, 0, 0, 0};
     private final int[] palitinhosGuesses = new int[]{-1, -1, -1, -1, -1, -1};
+    private final int[] palitinhosScores = new int[]{0, 0, 0, 0, 0, 0};
     private final boolean[] palitinhosReady = new boolean[]{false, false, false, false, false, false};
     private final boolean[] palitinhosJoined = new boolean[]{true, false, false, false, false, false};
     private final boolean[] palitinhosConfirmed = new boolean[]{false, false, false, false, false, false};
@@ -284,6 +285,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String palitinhosGameId = "";
     private String palitinhosHostAddress = "";
     private String palitinhosHostName = "";
+    private int localPalitinhosPlayerIndex = 0;
+    private int palitinhosRoundNumber = 0;
+    private boolean palitinhosRoomStarted = false;
+    private String pendingPalitinhosJoinBody = "";
+    private String pendingPalitinhosJoinGameId = "";
     private int palitinhosStartCountdown = 0;
     private String palitinhosReturnScreen = "";
     private String palitinhosReturnAddress = "";
@@ -3047,7 +3053,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             palitinhosSpectator[i] = false;
             palitinhosHands[i] = 0;
             palitinhosGuesses[i] = -1;
+            palitinhosScores[i] = 0;
         }
+        localPalitinhosPlayerIndex = 0;
+        palitinhosRoomStarted = false;
+        pendingPalitinhosJoinBody = "";
+        pendingPalitinhosJoinGameId = "";
+        palitinhosRoundNumber = 0;
         palitinhosRoundPhase = 1;
         palitinhosCountdown = 0;
         palitinhosRevealCount = 0;
@@ -3106,9 +3118,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             root.addView(palitinhosLobbyPlayerRow(i), topMargin(dp(8)));
         }
 
-        Button ready = pillButton(palitinhosReady[0] ? "Nao estou pronto" : "Estou pronto", palitinhosReady[0] ? surfaceAlt() : "#16A34A", palitinhosReady[0] ? primary() : "#FFFFFF");
+        int localIndex = localPalitinhosPlayerIndex;
+        Button ready = pillButton(palitinhosReady[localIndex] ? "Nao estou pronto" : "Estou pronto", palitinhosReady[localIndex] ? surfaceAlt() : "#16A34A", palitinhosReady[localIndex] ? primary() : "#FFFFFF");
         ready.setOnClickListener(v -> {
-            palitinhosReady[0] = !palitinhosReady[0];
+            palitinhosReady[localIndex] = !palitinhosReady[localIndex];
             if (!palitinhosHostMode) {
                 sendPalitinhosReady();
             }
@@ -3280,10 +3293,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             palitinhosJoined[i] = false;
             palitinhosReady[i] = false;
         }
-        String body = palitinhosInviteBody("invite");
         long sentAt = System.currentTimeMillis();
         for (int i = 0; i < invited; i++) {
             String address = palitinhosInvitees.get(i);
+            String body = palitinhosInviteBody("invite", i + 1);
             String id = messageStore.createId();
             messageStore.addMessage(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
             sendOrQueueOutgoing(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt);
@@ -3295,7 +3308,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void startPalitinhosFromHost() {
-        String body = palitinhosInviteBody("start_countdown");
+        palitinhosRoomStarted = true;
+        preparePalitinhosRound(true);
+        String body = palitinhosStartCountdownBody();
         for (int i = 0; i < Math.min(palitinhosInvitees.size(), palitinhosPlayers - 1); i++) {
             if (palitinhosJoined[i + 1] && palitinhosReady[i + 1]) {
                 sendPalitinhosInternal(palitinhosInvitees.get(i), body);
@@ -3304,7 +3319,24 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         beginPalitinhosStartCountdown(3);
     }
 
+    private String palitinhosStartCountdownBody() {
+        try {
+            JSONObject json = basePalitinhosEvent("start_countdown");
+            json.put("countdown", 3);
+            json.put("players", palitinhosPlayers);
+            json.put("handTimeSeconds", palitinhosHandTimeSeconds);
+            json.put("turn", palitinhosTurn);
+            return json.toString();
+        } catch (JSONException ignored) {
+            return "";
+        }
+    }
+
     private String palitinhosInviteBody(String type) {
+        return palitinhosInviteBody(type, localPalitinhosPlayerIndex);
+    }
+
+    private String palitinhosInviteBody(String type, int playerIndex) {
         try {
             JSONObject json = new JSONObject();
             json.put("type", type);
@@ -3312,8 +3344,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             json.put("hostName", palitinhosPlayerName(0));
             json.put("players", palitinhosPlayers);
             json.put("handTimeSeconds", palitinhosHandTimeSeconds);
-            json.put("ready", palitinhosReady[0]);
+            int safeIndex = Math.max(0, Math.min(palitinhosReady.length - 1, playerIndex));
+            json.put("ready", palitinhosReady[safeIndex]);
             json.put("countdown", 3);
+            json.put("playerIndex", playerIndex);
+            json.put("round", palitinhosRoundNumber);
             return json.toString();
         } catch (JSONException ignored) {
             return "";
@@ -3337,6 +3372,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         String body = palitinhosInviteBody(type);
         sendPalitinhosInternal(palitinhosHostAddress, body);
+    }
+
+    private JSONObject basePalitinhosEvent(String type) throws JSONException {
+        JSONObject json = new JSONObject();
+        json.put("type", type);
+        json.put("gameId", palitinhosGameId == null ? "" : palitinhosGameId);
+        json.put("playerIndex", localPalitinhosPlayerIndex);
+        json.put("round", palitinhosRoundNumber);
+        return json;
     }
 
     private void sendPalitinhosInternal(String address, String body) {
@@ -3368,6 +3412,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void startPalitinhosRound(boolean firstRound) {
+        preparePalitinhosRound(firstRound);
+        showPalitinhosScreen();
+    }
+
+    private void preparePalitinhosRound(boolean firstRound) {
+        palitinhosRoundNumber++;
         for (int i = 0; i < palitinhosPlayers; i++) {
             palitinhosHands[i] = 0;
             palitinhosConfirmed[i] = palitinhosSpectator[i];
@@ -3381,7 +3431,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } else {
             palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
         }
-        showPalitinhosScreen();
     }
 
     private void beginPalitinhosStartCountdown(int count) {
@@ -3405,7 +3454,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             }
             palitinhosStartCountdown--;
             if (palitinhosStartCountdown <= 0) {
-                startPalitinhosRound(true);
+                showPalitinhosScreen();
             } else {
                 showPalitinhosStartCountdownScreen();
             }
@@ -3428,7 +3477,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         LinearLayout top = horizontal();
         top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> showStoreScreen()));
+        top.addView(iconButton(R.drawable.ic_back_24, "Voltar", dp(42), v -> leavePalitinhosToPreviousScreen()));
         TextView title = text("Palitinhos", 25, "#F8FAFC", Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(12), 0, 0, 0);
@@ -3442,7 +3491,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         TextView turn = text(palitinhosCenterTitle(), palitinhosRoundPhase == 3 && palitinhosCountdown > 0 ? 92 : 22,
                 palitinhosRoundPhase == 3 && palitinhosCountdown > 0 ? "#FACC15" : "#BBF7D0", Typeface.BOLD);
         turn.setGravity(Gravity.CENTER);
-        if (palitinhosRoundPhase == 2 && palitinhosTurn == 0) {
+        if (palitinhosRoundPhase == 2 && palitinhosTurn == localPalitinhosPlayerIndex) {
             turn.setOnClickListener(v -> showPalitinhosGuessDialog());
         }
         hud.addView(turn);
@@ -3450,7 +3499,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (!hintText.isEmpty()) {
             TextView hint = text(hintText, 14, "#CBD5E1", Typeface.NORMAL);
             hint.setGravity(Gravity.CENTER);
-            if (palitinhosRoundPhase == 2 && palitinhosTurn == 0) {
+            if (palitinhosRoundPhase == 2 && palitinhosTurn == localPalitinhosPlayerIndex) {
                 hint.setOnClickListener(v -> showPalitinhosGuessDialog());
             }
             hud.addView(hint, topMargin(dp(5)));
@@ -3473,7 +3522,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         setContentView(root);
         requestInsets(root);
         schedulePalitinhosAutoAdvance();
-        schedulePalitinhosAutoGuessIfNeeded();
     }
 
     private FrameLayout.LayoutParams handPosition(int[] spec) {
@@ -3492,7 +3540,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         LinearLayout stack = vertical();
         stack.setGravity(Gravity.CENTER);
         ImageView hand = new ImageView(this);
-        boolean choosingMine = index == 0 && palitinhosRoundPhase == 1 && !palitinhosConfirmed[0];
+        boolean choosingMine = index == localPalitinhosPlayerIndex && palitinhosRoundPhase == 1 && !palitinhosConfirmed[localPalitinhosPlayerIndex];
         boolean revealed = choosingMine || (palitinhosRoundPhase == 3 && index < palitinhosRevealCount);
         hand.setImageResource(revealed ? R.drawable.palitinhos_hand_open : R.drawable.palitinhos_hand_fist);
         hand.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -3510,14 +3558,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (choosingMine) {
             wrap.setOnClickListener(v -> {
-                palitinhosHands[0] = (palitinhosHands[0] + 1) % 4;
+                palitinhosHands[localPalitinhosPlayerIndex] = (palitinhosHands[localPalitinhosPlayerIndex] + 1) % 4;
                 showPalitinhosScreen();
             });
             wrap.setOnLongClickListener(v -> {
                 confirmPalitinhosHand();
                 return true;
             });
-        } else if (palitinhosRoundPhase == 2 && index == 0 && palitinhosTurn == 0 && !palitinhosSpectator[0]) {
+        } else if (palitinhosRoundPhase == 2 && index == localPalitinhosPlayerIndex && palitinhosTurn == localPalitinhosPlayerIndex && !palitinhosSpectator[localPalitinhosPlayerIndex]) {
             wrap.setOnClickListener(v -> showPalitinhosGuessDialog());
         }
         return wrap;
@@ -3542,6 +3590,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private String palitinhosPlayerStatus(int index) {
         String name = palitinhosPlayerName(index);
+        if (palitinhosScores[index] > 0) {
+            name += " " + palitinhosScores[index] + "pt";
+        }
         if (palitinhosSpectator[index]) {
             return name + " fora";
         }
@@ -3555,12 +3606,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private String palitinhosPlayerName(int index) {
-        if (index == 0) {
+        if (!palitinhosHostMode && index == 0 && palitinhosHostName != null && !palitinhosHostName.trim().isEmpty()) {
+            return palitinhosHostName;
+        }
+        if (index == localPalitinhosPlayerIndex) {
             UserProfile local = profileStore.loadLocalProfile();
             return local.isComplete() ? local.getDisplayName() : "Voce";
-        }
-        if (!palitinhosHostMode && index == 1 && palitinhosHostName != null && !palitinhosHostName.trim().isEmpty()) {
-            return palitinhosHostName;
         }
         int inviteIndex = index - 1;
         if (inviteIndex >= 0 && inviteIndex < palitinhosInvitees.size()) {
@@ -3573,23 +3624,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void confirmPalitinhosHand() {
-        if (palitinhosRoundPhase != 1 || palitinhosConfirmed[0]) {
+        int localIndex = localPalitinhosPlayerIndex;
+        if (palitinhosRoundPhase != 1 || palitinhosConfirmed[localIndex]) {
             return;
         }
-        palitinhosConfirmed[0] = true;
-        simulatePalitinhosHandsIfNeeded();
-        if (allPalitinhosHandsConfirmed()) {
-            palitinhosRoundPhase = 2;
+        palitinhosConfirmed[localIndex] = true;
+        if (palitinhosHostMode) {
+            if (allPalitinhosHandsConfirmed()) {
+                enterPalitinhosGuessPhase();
+            }
+        } else {
+            sendPalitinhosHandToHost();
         }
         showPalitinhosScreen();
     }
 
     private String palitinhosCenterTitle() {
         if (palitinhosRoundPhase == 1) {
-            return palitinhosConfirmed[0] ? "Mao confirmada" : "Palitos: " + palitinhosHands[0];
+            return palitinhosConfirmed[localPalitinhosPlayerIndex] ? "Mao confirmada" : "Palitos: " + palitinhosHands[localPalitinhosPlayerIndex];
         }
         if (palitinhosRoundPhase == 2) {
-            return palitinhosTurn == 0 ? "Sua vez" : "Palpite de " + palitinhosPlayerName(palitinhosTurn);
+            return palitinhosTurn == localPalitinhosPlayerIndex ? "Sua vez" : "Palpite de " + palitinhosPlayerName(palitinhosTurn);
         }
         if (palitinhosCountdown > 0) {
             return String.valueOf(palitinhosCountdown);
@@ -3602,12 +3657,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private String palitinhosCenterHint() {
         if (palitinhosRoundPhase == 1) {
-            return palitinhosConfirmed[0]
+            return palitinhosConfirmed[localPalitinhosPlayerIndex]
                     ? "Aguardando jogadores..."
                     : "Toque na mao para escolher • Segure para confirmar";
         }
         if (palitinhosRoundPhase == 2) {
-            return palitinhosTurn == 0
+            return palitinhosTurn == localPalitinhosPlayerIndex
                     ? "Toque aqui ou na sua mao para dar palpite"
                     : "Aguardando " + palitinhosPlayerName(palitinhosTurn);
         }
@@ -3621,7 +3676,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showPalitinhosGuessDialog() {
-        if (palitinhosRoundPhase != 2 || palitinhosTurn != 0 || palitinhosSpectator[0]) {
+        int localIndex = localPalitinhosPlayerIndex;
+        if (palitinhosRoundPhase != 2 || palitinhosTurn != localIndex || palitinhosSpectator[localIndex]) {
             Toast.makeText(this, "Aguarde sua vez de dar palpite.", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -3633,38 +3689,163 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .setTitle("Palpite da soma")
                 .setItems(values, (dialog, which) -> {
                     palitinhosGuess = which;
-                    palitinhosGuesses[palitinhosTurn] = which;
-                    if (allPalitinhosGuessed()) {
-                        palitinhosRoundPhase = 3;
-                        palitinhosCountdown = 3;
-                        palitinhosRevealCount = 0;
+                    palitinhosGuesses[localIndex] = which;
+                    if (palitinhosHostMode) {
+                        advancePalitinhosAfterHostGuess();
                     } else {
-                        palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
+                        sendPalitinhosGuessToHost(which);
                     }
                     showPalitinhosScreen();
                 })
                 .show();
     }
 
-    private void schedulePalitinhosAutoGuessIfNeeded() {
-        if (!"palitinhos".equals(currentScreen) || palitinhosRoundPhase != 2 || palitinhosTurn == 0 || palitinhosTurn < 0) {
+    private void sendPalitinhosHandToHost() {
+        if (palitinhosHostAddress == null || palitinhosHostAddress.trim().isEmpty()) {
+            Toast.makeText(this, "Host indisponivel. Tente reconectar.", Toast.LENGTH_LONG).show();
             return;
         }
-        uiHandler.postDelayed(() -> {
-            if (!"palitinhos".equals(currentScreen) || palitinhosRoundPhase != 2 || palitinhosTurn == 0 || palitinhosTurn < 0) {
-                return;
+        try {
+            JSONObject json = basePalitinhosEvent("hand");
+            json.put("hand", palitinhosHands[localPalitinhosPlayerIndex]);
+            json.put("confirmed", true);
+            sendPalitinhosInternal(palitinhosHostAddress, json.toString());
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private void sendPalitinhosGuessToHost(int guess) {
+        if (palitinhosHostAddress == null || palitinhosHostAddress.trim().isEmpty()) {
+            Toast.makeText(this, "Host indisponivel. Tente reconectar.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            JSONObject json = basePalitinhosEvent("guess");
+            json.put("guess", guess);
+            sendPalitinhosInternal(palitinhosHostAddress, json.toString());
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private void enterPalitinhosGuessPhase() {
+        palitinhosRoundPhase = 2;
+        palitinhosRevealCount = 0;
+        palitinhosCountdown = 0;
+        if (palitinhosTurn < 0 || palitinhosTurn >= palitinhosPlayers || palitinhosSpectator[palitinhosTurn]) {
+            palitinhosTurn = nextActivePalitinhosIndex(-1);
+        }
+        broadcastPalitinhosPhase();
+    }
+
+    private void advancePalitinhosAfterHostGuess() {
+        if (allPalitinhosGuessed()) {
+            beginPalitinhosRevealFromHost();
+            return;
+        }
+        palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
+        broadcastPalitinhosPhase();
+    }
+
+    private void beginPalitinhosRevealFromHost() {
+        palitinhosRoundPhase = 3;
+        palitinhosCountdown = 3;
+        palitinhosRevealCount = 0;
+        broadcastPalitinhosRevealStart();
+    }
+
+    private void broadcastPalitinhosPhase() {
+        try {
+            JSONObject json = basePalitinhosEvent("phase");
+            json.put("phase", palitinhosRoundPhase);
+            json.put("turn", palitinhosTurn);
+            json.put("guesses", intArrayJson(palitinhosGuesses));
+            json.put("confirmed", booleanArrayJson(palitinhosConfirmed));
+            broadcastPalitinhosEvent(json.toString());
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private void broadcastPalitinhosRevealStart() {
+        try {
+            JSONObject json = basePalitinhosEvent("reveal_start");
+            json.put("phase", 3);
+            json.put("turn", palitinhosTurn);
+            json.put("countdown", palitinhosCountdown);
+            json.put("hands", intArrayJson(palitinhosHands));
+            json.put("guesses", intArrayJson(palitinhosGuesses));
+            json.put("scores", intArrayJson(palitinhosScores));
+            json.put("total", palitinhosTotal());
+            broadcastPalitinhosEvent(json.toString());
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private void broadcastPalitinhosRoundStart(boolean firstRound) {
+        if (!palitinhosHostMode) {
+            return;
+        }
+        preparePalitinhosRound(firstRound);
+        try {
+            JSONObject json = basePalitinhosEvent("round_start");
+            json.put("players", palitinhosPlayers);
+            json.put("handTimeSeconds", palitinhosHandTimeSeconds);
+            json.put("turn", palitinhosTurn);
+            json.put("scores", intArrayJson(palitinhosScores));
+            broadcastPalitinhosEvent(json.toString());
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private void broadcastPalitinhosEvent(String body) {
+        if (!palitinhosHostMode || body == null || body.trim().isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < Math.min(palitinhosInvitees.size(), palitinhosPlayers - 1); i++) {
+            int playerIndex = i + 1;
+            if (palitinhosJoined[playerIndex]) {
+                sendPalitinhosInternal(palitinhosInvitees.get(i), body);
             }
-            // TODO: substituir por sincronizacao Bluetooth real de palpites dos outros jogadores.
-            palitinhosGuesses[palitinhosTurn] = new Random().nextInt((palitinhosPlayers * 3) + 1);
-            if (allPalitinhosGuessed()) {
-                palitinhosRoundPhase = 3;
-                palitinhosCountdown = 3;
-                palitinhosRevealCount = 0;
-            } else {
-                palitinhosTurn = nextActivePalitinhosIndex(palitinhosTurn);
-            }
-            showPalitinhosScreen();
-        }, 900L);
+        }
+    }
+
+    private JSONArray intArrayJson(int[] values) {
+        JSONArray array = new JSONArray();
+        for (int value : values) {
+            array.put(value);
+        }
+        return array;
+    }
+
+    private JSONArray booleanArrayJson(boolean[] values) {
+        JSONArray array = new JSONArray();
+        for (boolean value : values) {
+            array.put(value);
+        }
+        return array;
+    }
+
+    private void readIntArray(JSONObject json, String key, int[] target) {
+        JSONArray array = json.optJSONArray(key);
+        if (array == null) {
+            return;
+        }
+        for (int i = 0; i < Math.min(target.length, array.length()); i++) {
+            target[i] = array.optInt(i, target[i]);
+        }
+    }
+
+    private void readBooleanArray(JSONObject json, String key, boolean[] target) {
+        JSONArray array = json.optJSONArray(key);
+        if (array == null) {
+            return;
+        }
+        for (int i = 0; i < Math.min(target.length, array.length()); i++) {
+            target[i] = array.optBoolean(i, target[i]);
+        }
+    }
+
+    private void schedulePalitinhosAutoGuessIfNeeded() {
+        // Palpites remotos chegam via evento interno Bluetooth "guess".
     }
 
     private String palitinhosPhaseTitle() {
@@ -3733,13 +3914,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void simulatePalitinhosHandsIfNeeded() {
-        Random random = new Random();
-        for (int i = 1; i < palitinhosPlayers; i++) {
-            if (!palitinhosSpectator[i] && !palitinhosConfirmed[i]) {
-                palitinhosHands[i] = random.nextInt(4);
-                palitinhosConfirmed[i] = true;
-            }
-        }
+        // O Palitinhos agora e sincronizado pelo host. Sem simulacao local de adversarios.
     }
 
     private int palitinhosTotal() {
@@ -3818,26 +3993,21 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return;
         }
         markPalitinhosRoundWinnersOut();
-        startPalitinhosRound(false);
+        if (palitinhosHostMode) {
+            broadcastPalitinhosRoundStart(false);
+            showPalitinhosScreen();
+        }
     }
 
     private void markPalitinhosRoundWinnersOut() {
         int total = palitinhosTotal();
-        int activeBefore = activePalitinhosPlayers();
         for (int i = 0; i < palitinhosPlayers; i++) {
             if (!palitinhosSpectator[i] && palitinhosGuesses[i] == total) {
-                palitinhosSpectator[i] = true;
+                palitinhosScores[i]++;
             }
         }
-        if (activeBefore <= 2) {
-            for (int i = 0; i < palitinhosPlayers; i++) {
-                if (!palitinhosSpectator[i] && palitinhosGuesses[i] != total) {
-                    palitinhosSpectator[i] = true;
-                    Toast.makeText(this, "Jogador " + (i + 1) + " eliminado. Continua como espectador.", Toast.LENGTH_LONG).show();
-                    break;
-                }
-            }
-        }
+        // TODO: regras completas de eliminacao para 3+ jogadores. Por enquanto a pontuacao
+        // fica host-authoritative e evita eliminar alguem errado em partidas Bluetooth reais.
     }
 
     private void showPalitinhosChatDialog() {
@@ -5325,17 +5495,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         palitinhosHostName = safeName(json.optString("hostName", "Host"), "Host");
         palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", 2)));
         palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+        localPalitinhosPlayerIndex = Math.max(1, Math.min(5, json.optInt("playerIndex", 1)));
         for (int i = 0; i < 6; i++) {
             palitinhosReady[i] = false;
-            palitinhosJoined[i] = i == 0 || i == 1;
+            palitinhosJoined[i] = i == 0 || i == localPalitinhosPlayerIndex;
             palitinhosConfirmed[i] = false;
             palitinhosSpectator[i] = false;
             palitinhosHands[i] = 0;
             palitinhosGuesses[i] = -1;
         }
         connectForPalitinhosStatus(palitinhosHostAddress);
-        sendPalitinhosJoin();
-        showPalitinhosLobbyScreen();
+        pendingPalitinhosJoinBody = body == null ? "" : body;
+        pendingPalitinhosJoinGameId = gameId;
+        sendPalitinhosSignalToHost("join_request");
+        Toast.makeText(this, "Solicitando entrada no lobby...", Toast.LENGTH_SHORT).show();
+        uiHandler.postDelayed(() -> {
+            if (gameId.equals(pendingPalitinhosJoinGameId)) {
+                pendingPalitinhosJoinBody = "";
+                pendingPalitinhosJoinGameId = "";
+                Toast.makeText(this, "Nao foi possivel entrar no lobby.", Toast.LENGTH_LONG).show();
+            }
+        }, 15000L);
     }
 
     private void saveSharedContact(ContactCardPayload payload) {
@@ -6068,11 +6248,103 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if ("start_countdown".equals(type)) {
             if (gameId.equals(palitinhosGameId) && !palitinhosHostMode && !expiredPalitinhosGames.contains(gameId)) {
+                palitinhosRoomStarted = true;
+                palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", palitinhosPlayers)));
+                palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+                palitinhosTurn = json.optInt("turn", palitinhosTurn);
+                palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
+                for (int i = 0; i < 6; i++) {
+                    palitinhosHands[i] = 0;
+                    palitinhosConfirmed[i] = false;
+                    palitinhosGuesses[i] = -1;
+                    palitinhosSpectator[i] = false;
+                }
+                palitinhosRoundPhase = 1;
+                palitinhosRevealCount = 0;
                 beginPalitinhosStartCountdown(Math.max(1, json.optInt("countdown", 3)));
             }
             return true;
         }
-        if (!"ready".equals(type) && !"join".equals(type)) {
+        if ("join_accept".equals(type)) {
+            if (!palitinhosHostMode && gameId.equals(pendingPalitinhosJoinGameId) && !expiredPalitinhosGames.contains(gameId)) {
+                pendingPalitinhosJoinBody = "";
+                pendingPalitinhosJoinGameId = "";
+                palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", palitinhosPlayers)));
+                palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+                localPalitinhosPlayerIndex = Math.max(1, Math.min(5, json.optInt("playerIndex", localPalitinhosPlayerIndex)));
+                for (int i = 0; i < 6; i++) {
+                    palitinhosJoined[i] = i == 0 || i == localPalitinhosPlayerIndex;
+                    palitinhosReady[i] = false;
+                    palitinhosConfirmed[i] = false;
+                    palitinhosSpectator[i] = false;
+                    palitinhosHands[i] = 0;
+                    palitinhosGuesses[i] = -1;
+                    palitinhosScores[i] = 0;
+                }
+                showPalitinhosLobbyScreen();
+            }
+            return true;
+        }
+        if ("join_reject".equals(type)) {
+            if (gameId.equals(pendingPalitinhosJoinGameId)) {
+                pendingPalitinhosJoinBody = "";
+                pendingPalitinhosJoinGameId = "";
+            }
+            if ("expired".equals(json.optString("reason", "")) && !gameId.isEmpty()) {
+                expiredPalitinhosGames.add(gameId);
+            }
+            Toast.makeText(this, "Nao foi possivel entrar nesta partida.", Toast.LENGTH_LONG).show();
+            if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
+                renderChatHistory(false);
+            }
+            return true;
+        }
+        if ("phase".equals(type)) {
+            if (gameId.equals(palitinhosGameId) && !palitinhosHostMode) {
+                palitinhosRoundPhase = Math.max(1, Math.min(3, json.optInt("phase", palitinhosRoundPhase)));
+                palitinhosTurn = json.optInt("turn", palitinhosTurn);
+                palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
+                readIntArray(json, "guesses", palitinhosGuesses);
+                readBooleanArray(json, "confirmed", palitinhosConfirmed);
+                if ("palitinhos".equals(currentScreen) || "palitinhos_start".equals(currentScreen)) {
+                    showPalitinhosScreen();
+                }
+            }
+            return true;
+        }
+        if ("reveal_start".equals(type)) {
+            if (gameId.equals(palitinhosGameId) && !palitinhosHostMode) {
+                palitinhosRoundPhase = 3;
+                palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
+                palitinhosCountdown = Math.max(0, json.optInt("countdown", 3));
+                palitinhosRevealCount = 0;
+                readIntArray(json, "hands", palitinhosHands);
+                readIntArray(json, "guesses", palitinhosGuesses);
+                readIntArray(json, "scores", palitinhosScores);
+                showPalitinhosScreen();
+            }
+            return true;
+        }
+        if ("round_start".equals(type)) {
+            if (gameId.equals(palitinhosGameId) && !palitinhosHostMode) {
+                palitinhosPlayers = Math.max(2, Math.min(6, json.optInt("players", palitinhosPlayers)));
+                palitinhosHandTimeSeconds = Math.max(5, Math.min(60, json.optInt("handTimeSeconds", palitinhosHandTimeSeconds)));
+                palitinhosTurn = json.optInt("turn", palitinhosTurn);
+                palitinhosRoundNumber = Math.max(1, json.optInt("round", palitinhosRoundNumber));
+                readIntArray(json, "scores", palitinhosScores);
+                for (int i = 0; i < 6; i++) {
+                    palitinhosHands[i] = 0;
+                    palitinhosConfirmed[i] = false;
+                    palitinhosGuesses[i] = -1;
+                }
+                palitinhosRoundPhase = 1;
+                palitinhosCountdown = 0;
+                palitinhosRevealCount = 0;
+                showPalitinhosScreen();
+            }
+            return true;
+        }
+        if (!"ready".equals(type) && !"join".equals(type) && !"join_request".equals(type) && !"hand".equals(type) && !"guess".equals(type)) {
             return true;
         }
         if (!palitinhosHostMode) {
@@ -6086,6 +6358,49 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return true;
         }
         int playerIndex = inviteIndex + 1;
+        if ("join_request".equals(type)) {
+            try {
+                JSONObject reply = palitinhosRoomStarted ? basePalitinhosEvent("join_reject") : basePalitinhosEvent("join_accept");
+                reply.put("playerIndex", playerIndex);
+                reply.put("players", palitinhosPlayers);
+                reply.put("handTimeSeconds", palitinhosHandTimeSeconds);
+                if (palitinhosRoomStarted) {
+                    reply.put("reason", "started");
+                } else {
+                    palitinhosJoined[playerIndex] = true;
+                    palitinhosReady[playerIndex] = false;
+                }
+                sendPalitinhosInternal(address, reply.toString());
+            } catch (JSONException ignored) {
+            }
+            if ("palitinhos_lobby".equals(currentScreen)) {
+                showPalitinhosLobbyScreen();
+            }
+            return true;
+        }
+        if ("hand".equals(type)) {
+            if (palitinhosRoundPhase == 1 && !palitinhosSpectator[playerIndex]) {
+                palitinhosHands[playerIndex] = Math.max(0, Math.min(3, json.optInt("hand", 0)));
+                palitinhosConfirmed[playerIndex] = json.optBoolean("confirmed", true);
+                if (allPalitinhosHandsConfirmed()) {
+                    enterPalitinhosGuessPhase();
+                }
+                if ("palitinhos".equals(currentScreen)) {
+                    showPalitinhosScreen();
+                }
+            }
+            return true;
+        }
+        if ("guess".equals(type)) {
+            if (palitinhosRoundPhase == 2 && palitinhosTurn == playerIndex && !palitinhosSpectator[playerIndex]) {
+                palitinhosGuesses[playerIndex] = Math.max(0, Math.min(palitinhosPlayers * 3, json.optInt("guess", -1)));
+                advancePalitinhosAfterHostGuess();
+                if ("palitinhos".equals(currentScreen)) {
+                    showPalitinhosScreen();
+                }
+            }
+            return true;
+        }
         palitinhosJoined[playerIndex] = true;
         palitinhosReady[playerIndex] = "ready".equals(type) && json.optBoolean("ready", false);
         if ("join".equals(type)) {

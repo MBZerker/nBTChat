@@ -1,9 +1,9 @@
 {
-  "versionCode": 65,
-  "versionName": "0.4.43",
+  "versionCode": 66,
+  "versionName": "0.4.44",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.43.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.44.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Sincroniza inicio do Palitinhos, limpa eventos internos do chat e corrige palitos visuais."
+  "changelog": "Palitinhos passa a usar host autoritativo para entrada, mao, palpite e revelacao, removendo simulacao local de adversarios."
 }
