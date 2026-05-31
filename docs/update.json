@@ -1,9 +1,9 @@
 {
-  "versionCode": 68,
-  "versionName": "0.4.46",
+  "versionCode": 69,
+  "versionName": "0.4.47",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.46.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.47.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Corrige estado de convites do Palitinhos, trava placar apos fim da partida e troca palpite por controle visual."
+  "changelog": "Refina Palitinhos com slider de palpite, palpites unicos, balao de escolha e reentrada em partida ativa."
 }
