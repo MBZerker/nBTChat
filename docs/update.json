@@ -1,9 +1,9 @@
 {
-  "versionCode": 69,
-  "versionName": "0.4.47",
+  "versionCode": 70,
+  "versionName": "0.4.48",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.47.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.48.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Refina Palitinhos com slider de palpite, palpites unicos, balao de escolha e reentrada em partida ativa."
+  "changelog": "Melhora visual do Palitinhos com slider destacado, baloes de fala, palitos naturais e lobby sincronizado."
 }
