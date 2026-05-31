@@ -1,9 +1,9 @@
 {
-  "versionCode": 67,
-  "versionName": "0.4.45",
+  "versionCode": 68,
+  "versionName": "0.4.46",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.45.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.46.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Palitinhos ganha meta de pontuacao 1x1, fim de partida sincronizado e mao local sempre embaixo."
+  "changelog": "Corrige estado de convites do Palitinhos, trava placar apos fim da partida e troca palpite por controle visual."
 }
