@@ -1,9 +1,9 @@
 {
-  "versionCode": 71,
-  "versionName": "0.4.49",
+  "versionCode": 72,
+  "versionName": "0.4.50",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.49.apk",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.50.apk",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Ajusta baloes de fala reutilizaveis do Palitinhos e corrige folga da seta do slider."
+  "changelog": "Torna download de atualizacao persistente, retomavel e resistente a permissao/tela apagada."
 }

@@ -143,6 +143,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final int REQUEST_VOICE_RECORD = 112;
     private static final int REQUEST_CHAT_CAMERA_PERMISSION = 113;
     private static final int REQUEST_NOTIFICATIONS = 114;
+    private static final int REQUEST_INSTALL_UPDATE_PERMISSION = 115;
     private static final int TERMS_VERSION = 1;
     private static final int MAX_GIF_BYTES = 640 * 1024;
     private static final int PROFILE_IMAGE_MAX_SIDE = 256;
@@ -178,6 +179,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private static final String PALITINHOS_PREFS = "palitinhos_state";
     private static final String KEY_EXPIRED_PALITINHOS_GAMES = "expired_palitinhos_games";
     private static final String KEY_EXPIRED_STORE_INVITES = "expired_store_invites";
+    private static final String UPDATE_STATE_PREFS = "update_state";
+    private static final String KEY_PENDING_UPDATE_VERSION = "pending_update_version";
+    private static final String KEY_PENDING_UPDATE_APK_URL = "pending_update_apk_url";
+    private static final String KEY_PENDING_UPDATE_FILE_PATH = "pending_update_file_path";
+    private static final String KEY_PENDING_UPDATE_DOWNLOAD_COMPLETE = "pending_update_download_complete";
+    private static final String KEY_PENDING_UPDATE_BYTES_DOWNLOADED = "pending_update_bytes_downloaded";
+    private static final String KEY_PENDING_UPDATE_TOTAL_BYTES = "pending_update_total_bytes";
+    private static final String KEY_PENDING_UPDATE_INSTALL_WAITING_PERMISSION = "pending_update_install_waiting_permission";
+    private static final String KEY_PENDING_UPDATE_LAST_ERROR = "pending_update_last_error";
+    private static final String KEY_PENDING_UPDATE_STARTED_AT = "pending_update_started_at";
     private static final int BUBBLE_TAIL_TOP = 1;
     private static final int BUBBLE_TAIL_BOTTOM = 2;
     private static final int BUBBLE_TAIL_LEFT = 3;
@@ -261,6 +272,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private Runnable table100AutoSyncRunnable;
     private Runnable scannerDiscoveryRunnable;
     private Runnable homePresenceProbeRunnable;
+    private AlertDialog updateDialog;
+    private DownloadOverlay updateDownloadOverlay;
+    private boolean updateDownloadInProgress;
+    private long updateDownloadStartedAt;
     private long lastOwnedCartelaSyncAt;
     private long lastDiscoverableRequestAt;
     private final Set<String> onlineAddresses = new HashSet<>();
@@ -493,6 +508,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         startPeriodicUpdateChecks(false);
         syncOwnedCartelaIfUseful();
+        uiHandler.postDelayed(this::resumePendingUpdateFlowIfNeeded, 250L);
     }
 
     @Override
@@ -553,6 +569,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_ENABLE_BT) {
             tryStartBluetooth();
+        } else if (requestCode == REQUEST_INSTALL_UPDATE_PERMISSION) {
+            resumePendingUpdateFlowIfNeeded();
         } else if (requestCode == REQUEST_PICK_PHOTO && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
             if (uri != null) {
@@ -8407,6 +8425,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showUpdateDialog() {
+        PendingUpdateState pending = loadPendingUpdateState();
+        if (hasPendingDownloadedApk(pending) && updateMatchesPending(pending)) {
+            showDownloadedUpdateDialog(pendingApkFile(pending));
+            return;
+        }
         StringBuilder message = new StringBuilder();
         if (updateVersionName.isEmpty()) {
             message.append("Uma nova versao do nBTChat esta pronta.");
@@ -8419,17 +8442,36 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         message.append("\n\nOrigem: ").append(updateOrigin == null || updateOrigin.trim().isEmpty()
                 ? "fonte oficial do nBTChat"
                 : updateOrigin.trim());
-        new AlertDialog.Builder(this)
+        dismissUpdateDialog();
+        updateDialog = new AlertDialog.Builder(this)
                 .setTitle("Atualizacao disponivel")
                 .setMessage(message.toString())
                 .setPositiveButton("Baixar e instalar", (dialog, which) -> downloadAndInstallUpdateApk())
                 .setNeutralButton("Abrir pagina", (dialog, which) -> openExternalLink(Uri.parse(updatePageUrl)))
                 .setNegativeButton("Agora nao", null)
-                .show();
+                .create();
+        updateDialog.setOnShowListener(dialog -> {
+            updateDialog.setCanceledOnTouchOutside(false);
+        });
+        updateDialog.setCancelable(false);
+        updateDialog.show();
     }
 
     private void downloadAndInstallUpdateApk() {
-        DownloadOverlay overlay = showDownloadOverlay();
+        PendingUpdateState pending = loadPendingUpdateState();
+        if (hasPendingDownloadedApk(pending) && updateMatchesPending(pending)) {
+            showDownloadedUpdateDialog(pendingApkFile(pending));
+            return;
+        }
+        if (updateDownloadInProgress) {
+            showDownloadOverlay(pending.bytesDownloaded, pending.totalBytes, pending.startedAt);
+            return;
+        }
+        File apk = pendingUpdateFileForCurrentUpdate();
+        updateDownloadInProgress = true;
+        updateDownloadStartedAt = System.currentTimeMillis();
+        savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(), false, 0L, 0L, false, "", updateDownloadStartedAt);
+        DownloadOverlay overlay = showDownloadOverlay(0L, 0L, updateDownloadStartedAt);
         new Thread(() -> {
             HttpURLConnection connection = null;
             try {
@@ -8442,13 +8484,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     throw new Exception("Servidor respondeu " + code);
                 }
                 int totalBytes = Math.max(0, connection.getContentLength());
-                File dir = new File(getCacheDir(), "backups");
-                if (!dir.exists() && !dir.mkdirs()) {
+                File dir = apk.getParentFile();
+                if (dir != null && !dir.exists() && !dir.mkdirs()) {
                     throw new Exception("Nao foi possivel preparar o download.");
                 }
-                File apk = new File(dir, "nBTChat-update.apk");
                 byte[] buffer = new byte[8192];
-                long startedAt = System.currentTimeMillis();
                 long downloaded = 0L;
                 try (InputStream input = connection.getInputStream();
                      FileOutputStream output = new FileOutputStream(apk)) {
@@ -8457,17 +8497,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         output.write(buffer, 0, read);
                         downloaded += read;
                         long finalDownloaded = downloaded;
-                        runOnUiThread(() -> updateDownloadOverlay(overlay, finalDownloaded, totalBytes, startedAt));
+                        savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(), false, finalDownloaded, totalBytes, false, "", updateDownloadStartedAt);
+                        runOnUiThread(() -> updateDownloadOverlay(overlay, finalDownloaded, totalBytes, updateDownloadStartedAt));
                     }
                 }
+                savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(), true, downloaded, totalBytes, false, "", updateDownloadStartedAt);
                 runOnUiThread(() -> {
+                    updateDownloadInProgress = false;
                     dismissDownloadOverlay(overlay);
-                    installDownloadedUpdate(apk);
+                    showDownloadedUpdateDialog(apk);
                 });
             } catch (Exception ex) {
+                savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(), false, Math.max(0L, apk.length()), 0L, false, ex.getMessage(), updateDownloadStartedAt);
                 runOnUiThread(() -> {
+                    updateDownloadInProgress = false;
                     dismissDownloadOverlay(overlay);
-                    Toast.makeText(this, "Nao foi possivel baixar a atualizacao.", Toast.LENGTH_LONG).show();
+                    showUpdateErrorDialog("Nao foi possivel baixar a atualizacao.");
                 });
             } finally {
                 if (connection != null) {
@@ -8477,7 +8522,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }, "nBTChat-apk-download").start();
     }
 
-    private DownloadOverlay showDownloadOverlay() {
+    private DownloadOverlay showDownloadOverlay(long downloaded, long totalBytes, long startedAt) {
+        if (updateDownloadOverlay != null && updateDownloadOverlay.popup != null && updateDownloadOverlay.popup.isShowing()) {
+            updateDownloadOverlay.popup.dismiss();
+        }
         FrameLayout shade = new FrameLayout(this);
         shade.setBackgroundColor(Color.argb(178, 0, 0, 0));
 
@@ -8487,6 +8535,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         TextView title = text("Baixando atualizacao", 18, primary(), Typeface.BOLD);
         card.addView(title);
+        TextView info = text("Nao feche esta tela. Se a tela apagar, o fluxo continua ao voltar.", 12, secondary(), Typeface.NORMAL);
+        info.setGravity(Gravity.CENTER);
+        info.setLineSpacing(dp(2), 1f);
+        card.addView(info, topMargin(dp(8)));
         ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100);
         bar.setIndeterminate(true);
@@ -8497,7 +8549,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(
                 Math.min(getResources().getDisplayMetrics().widthPixels - dp(42), dp(360)),
-                dp(150),
+                dp(198),
                 Gravity.CENTER
         );
         shade.addView(card, cardParams);
@@ -8506,7 +8558,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(false);
         popup.showAtLocation(getWindow().getDecorView(), Gravity.CENTER, 0, 0);
-        return new DownloadOverlay(popup, bar, detail);
+        updateDownloadOverlay = new DownloadOverlay(popup, bar, detail);
+        updateDownloadOverlay(updateDownloadOverlay, downloaded, (int) totalBytes, startedAt <= 0L ? System.currentTimeMillis() : startedAt);
+        return updateDownloadOverlay;
     }
 
     private void updateDownloadOverlay(DownloadOverlay overlay, long downloaded, int totalBytes, long startedAt) {
@@ -8530,6 +8584,172 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (overlay != null && overlay.popup != null && overlay.popup.isShowing()) {
             overlay.popup.dismiss();
         }
+        if (overlay == updateDownloadOverlay) {
+            updateDownloadOverlay = null;
+        }
+    }
+
+    private void dismissUpdateDialog() {
+        if (updateDialog != null && updateDialog.isShowing()) {
+            updateDialog.dismiss();
+        }
+        updateDialog = null;
+    }
+
+    private SharedPreferences updateStatePrefs() {
+        return getSharedPreferences(UPDATE_STATE_PREFS, MODE_PRIVATE);
+    }
+
+    private void savePendingUpdateState(String version, String apkUrl, String filePath, boolean complete,
+                                        long downloaded, long total, boolean waitingPermission,
+                                        String lastError, long startedAt) {
+        updateStatePrefs().edit()
+                .putString(KEY_PENDING_UPDATE_VERSION, version == null ? "" : version)
+                .putString(KEY_PENDING_UPDATE_APK_URL, apkUrl == null ? "" : apkUrl)
+                .putString(KEY_PENDING_UPDATE_FILE_PATH, filePath == null ? "" : filePath)
+                .putBoolean(KEY_PENDING_UPDATE_DOWNLOAD_COMPLETE, complete)
+                .putLong(KEY_PENDING_UPDATE_BYTES_DOWNLOADED, downloaded)
+                .putLong(KEY_PENDING_UPDATE_TOTAL_BYTES, total)
+                .putBoolean(KEY_PENDING_UPDATE_INSTALL_WAITING_PERMISSION, waitingPermission)
+                .putString(KEY_PENDING_UPDATE_LAST_ERROR, lastError == null ? "" : lastError)
+                .putLong(KEY_PENDING_UPDATE_STARTED_AT, startedAt)
+                .apply();
+    }
+
+    private void clearPendingUpdateState() {
+        updateStatePrefs().edit().clear().apply();
+    }
+
+    private PendingUpdateState loadPendingUpdateState() {
+        SharedPreferences prefs = updateStatePrefs();
+        return new PendingUpdateState(
+                prefs.getString(KEY_PENDING_UPDATE_VERSION, ""),
+                prefs.getString(KEY_PENDING_UPDATE_APK_URL, ""),
+                prefs.getString(KEY_PENDING_UPDATE_FILE_PATH, ""),
+                prefs.getBoolean(KEY_PENDING_UPDATE_DOWNLOAD_COMPLETE, false),
+                prefs.getLong(KEY_PENDING_UPDATE_BYTES_DOWNLOADED, 0L),
+                prefs.getLong(KEY_PENDING_UPDATE_TOTAL_BYTES, 0L),
+                prefs.getBoolean(KEY_PENDING_UPDATE_INSTALL_WAITING_PERMISSION, false),
+                prefs.getString(KEY_PENDING_UPDATE_LAST_ERROR, ""),
+                prefs.getLong(KEY_PENDING_UPDATE_STARTED_AT, 0L)
+        );
+    }
+
+    private File pendingUpdateFileForCurrentUpdate() {
+        File dir = new File(getCacheDir(), "updates");
+        String cleanVersion = updateVersionName == null || updateVersionName.trim().isEmpty()
+                ? "latest"
+                : updateVersionName.replaceAll("[^A-Za-z0-9._-]", "_");
+        return new File(dir, "nBTChat-update-" + cleanVersion + ".apk");
+    }
+
+    private File pendingApkFile(PendingUpdateState state) {
+        if (state == null || state.filePath.trim().isEmpty()) {
+            return pendingUpdateFileForCurrentUpdate();
+        }
+        return new File(state.filePath);
+    }
+
+    private boolean updateMatchesPending(PendingUpdateState state) {
+        if (state == null) {
+            return false;
+        }
+        boolean urlMatches = state.apkUrl.trim().isEmpty() || updateApkUrl.trim().isEmpty() || state.apkUrl.equals(updateApkUrl);
+        boolean versionMatches = state.version.trim().isEmpty() || updateVersionName.trim().isEmpty() || state.version.equals(updateVersionName);
+        return urlMatches && versionMatches;
+    }
+
+    private boolean hasPendingDownloadedApk(PendingUpdateState state) {
+        File apk = pendingApkFile(state);
+        if (state == null || !state.downloadComplete || apk == null || !apk.exists() || apk.length() <= 0L) {
+            return false;
+        }
+        return state.totalBytes <= 0L || apk.length() == state.totalBytes;
+    }
+
+    private void resumePendingUpdateFlowIfNeeded() {
+        PendingUpdateState state = loadPendingUpdateState();
+        if (state.filePath.trim().isEmpty() && !updateDownloadInProgress) {
+            return;
+        }
+        if (updateDialog != null && updateDialog.isShowing()) {
+            return;
+        }
+        if (updateDownloadInProgress) {
+            showDownloadOverlay(state.bytesDownloaded, state.totalBytes, state.startedAt);
+            return;
+        }
+        if (hasPendingDownloadedApk(state)) {
+            File apk = pendingApkFile(state);
+            if (state.waitingPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+                showInstallPermissionDialog(apk);
+            } else {
+                showDownloadedUpdateDialog(apk);
+            }
+            return;
+        }
+        if (state.downloadComplete && !hasPendingDownloadedApk(state)) {
+            File broken = pendingApkFile(state);
+            if (broken != null && broken.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                broken.delete();
+            }
+            showUpdateErrorDialog("Arquivo de atualizacao invalido. Baixe novamente.");
+        } else if (!state.lastError.trim().isEmpty()) {
+            showUpdateErrorDialog("Nao foi possivel baixar a atualizacao.");
+        }
+    }
+
+    private void showDownloadedUpdateDialog(File apk) {
+        dismissDownloadOverlay(updateDownloadOverlay);
+        dismissUpdateDialog();
+        updateDialog = new AlertDialog.Builder(this)
+                .setTitle("Atualizacao baixada")
+                .setMessage("O APK ja foi baixado. Continue a instalacao.")
+                .setPositiveButton("Instalar agora", (dialog, which) -> installDownloadedUpdate(apk))
+                .setNegativeButton("Agora nao", null)
+                .create();
+        updateDialog.setOnShowListener(dialog -> updateDialog.setCanceledOnTouchOutside(false));
+        updateDialog.setCancelable(false);
+        updateDialog.show();
+    }
+
+    private void showInstallPermissionDialog(File apk) {
+        dismissDownloadOverlay(updateDownloadOverlay);
+        dismissUpdateDialog();
+        updateDialog = new AlertDialog.Builder(this)
+                .setTitle("Permissao necessaria")
+                .setMessage("Permita o nBTChat a instalar atualizacoes. Ao voltar, a instalacao continuara.")
+                .setPositiveButton("Abrir permissao", (dialog, which) -> openInstallPermissionSettings(apk))
+                .setNegativeButton("Agora nao", null)
+                .create();
+        updateDialog.setOnShowListener(dialog -> updateDialog.setCanceledOnTouchOutside(false));
+        updateDialog.setCancelable(false);
+        updateDialog.show();
+    }
+
+    private void showUpdateErrorDialog(String message) {
+        dismissUpdateDialog();
+        updateDialog = new AlertDialog.Builder(this)
+                .setTitle("Atualizacao")
+                .setMessage(message)
+                .setPositiveButton("Tentar novamente", (dialog, which) -> downloadAndInstallUpdateApk())
+                .setNegativeButton("Agora nao", null)
+                .create();
+        updateDialog.setOnShowListener(dialog -> updateDialog.setCanceledOnTouchOutside(false));
+        updateDialog.setCancelable(false);
+        updateDialog.show();
+    }
+
+    private void openInstallPermissionSettings(File apk) {
+        savePendingUpdateState(updateVersionName, updateApkUrl, apk == null ? "" : apk.getAbsolutePath(),
+                true, apk == null ? 0L : apk.length(), apk == null ? 0L : apk.length(), true, "", System.currentTimeMillis());
+        Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+        try {
+            startActivityForResult(settings, REQUEST_INSTALL_UPDATE_PERMISSION);
+        } catch (Exception ex) {
+            startActivity(settings);
+        }
     }
 
     private String formatBytes(long bytes) {
@@ -8552,20 +8772,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void installDownloadedUpdate(File apk) {
-        if (apk == null || !apk.exists()) {
+        if (apk == null || !apk.exists() || apk.length() <= 0L) {
             Toast.makeText(this, "APK de atualizacao nao encontrado.", Toast.LENGTH_LONG).show();
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
-            Toast.makeText(this, "Autorize o nBTChat a instalar atualizacoes e toque em baixar novamente.", Toast.LENGTH_LONG).show();
-            Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
-            startActivity(settings);
+            savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(),
+                    true, apk.length(), apk.length(), true, "", System.currentTimeMillis());
+            showInstallPermissionDialog(apk);
             return;
         }
+        savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(),
+                true, apk.length(), apk.length(), false, "", System.currentTimeMillis());
         Uri uri = BackupFileProvider.uriFor(this, apk);
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.setDataAndType(uri, "application/vnd.android.package-archive");
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(intent);
         } catch (Exception ex) {
@@ -9350,6 +9573,32 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             this.popup = popup;
             this.progress = progress;
             this.detail = detail;
+        }
+    }
+
+    private static final class PendingUpdateState {
+        final String version;
+        final String apkUrl;
+        final String filePath;
+        final boolean downloadComplete;
+        final long bytesDownloaded;
+        final long totalBytes;
+        final boolean waitingPermission;
+        final String lastError;
+        final long startedAt;
+
+        PendingUpdateState(String version, String apkUrl, String filePath, boolean downloadComplete,
+                           long bytesDownloaded, long totalBytes, boolean waitingPermission,
+                           String lastError, long startedAt) {
+            this.version = version == null ? "" : version;
+            this.apkUrl = apkUrl == null ? "" : apkUrl;
+            this.filePath = filePath == null ? "" : filePath;
+            this.downloadComplete = downloadComplete;
+            this.bytesDownloaded = bytesDownloaded;
+            this.totalBytes = totalBytes;
+            this.waitingPermission = waitingPermission;
+            this.lastError = lastError == null ? "" : lastError;
+            this.startedAt = startedAt;
         }
     }
 
