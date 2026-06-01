@@ -13,7 +13,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -58,6 +60,7 @@ import android.text.TextUtils;
 import android.text.method.LinkMovementMethod;
 import android.text.style.ClickableSpan;
 import android.util.Base64;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -108,6 +111,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -165,6 +169,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     };
     private static final String UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/update.json";
     private static final String DOWNLOAD_PAGE_URL = "https://mbzerker.github.io/nBTChat/";
+    private static final String UPDATE_LOG_TAG = "nBTChatUpdate";
     private static final Pattern LINK_PATTERN = Pattern.compile("(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)");
     private static final long PENDING_WAKE_DELAY_MS = 1800L;
     private static final long PENDING_REPAIR_DELAY_MS = 30_000L;
@@ -263,6 +268,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String updateApkUrl = "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat.apk";
     private String updateChangelog = "";
     private String updateOrigin = "GitHub Pages oficial do nBTChat";
+    private String updateSha256 = "";
     private MediaPlayer playingVoicePlayer;
     private File playingVoiceFile;
     private String playingVoiceId = "";
@@ -8618,10 +8624,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 connection.setConnectTimeout(10_000);
                 connection.setReadTimeout(20_000);
                 int code = connection.getResponseCode();
+                String contentType = connection.getContentType();
+                int totalBytes = Math.max(0, connection.getContentLength());
+                Log.d(UPDATE_LOG_TAG, "download status=" + code + " type=" + contentType + " length=" + totalBytes + " url=" + updateApkUrl);
                 if (code < 200 || code >= 300) {
                     throw new Exception("Servidor respondeu " + code);
                 }
-                int totalBytes = Math.max(0, connection.getContentLength());
+                if (isClearlyNotApkContent(contentType)) {
+                    throw new Exception("Servidor retornou " + contentType + " em vez de APK.");
+                }
                 File dir = apk.getParentFile();
                 if (dir != null && !dir.exists() && !dir.mkdirs()) {
                     throw new Exception("Nao foi possivel preparar o download.");
@@ -8639,13 +8650,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         runOnUiThread(() -> updateDownloadOverlay(overlay, finalDownloaded, totalBytes, updateDownloadStartedAt));
                     }
                 }
+                ApkValidationResult validation = validateDownloadedApk(apk, totalBytes, true);
+                if (!validation.ok) {
+                    throw new InvalidUpdateApkException(validation);
+                }
                 savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(), true, downloaded, totalBytes, false, "", updateDownloadStartedAt);
                 runOnUiThread(() -> {
                     updateDownloadInProgress = false;
                     dismissDownloadOverlay(overlay);
                     showDownloadedUpdateDialog(apk);
                 });
+            } catch (InvalidUpdateApkException ex) {
+                Log.e(UPDATE_LOG_TAG, "invalid downloaded apk: " + ex.result.reason + " details=" + ex.result.details);
+                deleteInvalidUpdate(apk);
+                clearPendingUpdateState();
+                runOnUiThread(() -> {
+                    updateDownloadInProgress = false;
+                    dismissDownloadOverlay(overlay);
+                    showUpdateDiagnosticDialog(ex.result, true);
+                });
             } catch (Exception ex) {
+                Log.e(UPDATE_LOG_TAG, "download failed", ex);
                 savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(), false, Math.max(0L, apk.length()), 0L, false, ex.getMessage(), updateDownloadStartedAt);
                 runOnUiThread(() -> {
                     updateDownloadInProgress = false;
@@ -8658,6 +8683,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 }
             }
         }, "nBTChat-apk-download").start();
+    }
+
+    private boolean isClearlyNotApkContent(String contentType) {
+        if (contentType == null || contentType.trim().isEmpty()) {
+            return false;
+        }
+        String lower = contentType.toLowerCase(Locale.ROOT);
+        return lower.contains("text/html")
+                || lower.contains("application/json")
+                || lower.contains("text/plain")
+                || lower.contains("xml");
     }
 
     private DownloadOverlay showDownloadOverlay(long downloaded, long totalBytes, long startedAt) {
@@ -8802,7 +8838,190 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (state == null || !state.downloadComplete || apk == null || !apk.exists() || apk.length() <= 0L) {
             return false;
         }
-        return state.totalBytes <= 0L || apk.length() == state.totalBytes;
+        if (state.totalBytes > 0L && apk.length() != state.totalBytes) {
+            return false;
+        }
+        return quickValidateDownloadedApk(apk);
+    }
+
+    private boolean quickValidateDownloadedApk(File apk) {
+        if (apk == null || !apk.exists() || apk.length() <= 0L || !apk.getName().toLowerCase(Locale.ROOT).endsWith(".apk")) {
+            return false;
+        }
+        if (!hasZipHeader(apk)) {
+            return false;
+        }
+        return readApkPackageInfo(apk) != null;
+    }
+
+    private ApkValidationResult validateDownloadedApk(File apk, long expectedBytes, boolean strictVersion) {
+        ApkValidationResult result = new ApkValidationResult(apk, expectedBytes);
+        if (apk == null) {
+            return result.fail("Arquivo de atualizacao invalido.", "Arquivo nulo.");
+        }
+        result.fileName = apk.getName();
+        result.fileLength = apk.exists() ? apk.length() : 0L;
+        if (!apk.exists()) {
+            return result.fail("Arquivo de atualizacao nao encontrado.", "Arquivo nao existe.");
+        }
+        if (apk.length() <= 0L) {
+            return result.fail("Arquivo de atualizacao vazio.", "Tamanho zero.");
+        }
+        if (expectedBytes > 0L && apk.length() != expectedBytes) {
+            return result.fail("Download incompleto. Baixe novamente.", "Esperado " + expectedBytes + " bytes, obtido " + apk.length() + " bytes.");
+        }
+        if (!apk.getName().toLowerCase(Locale.ROOT).endsWith(".apk")) {
+            return result.fail("Arquivo de atualizacao invalido.", "Extensao diferente de APK.");
+        }
+        if (!hasZipHeader(apk)) {
+            return result.fail("Arquivo de atualizacao invalido. Baixe novamente.", "Arquivo nao comeca com assinatura ZIP PK.");
+        }
+        if (!updateSha256.trim().isEmpty()) {
+            String sha = sha256(apk);
+            result.sha256 = sha;
+            if (!updateSha256.equalsIgnoreCase(sha)) {
+                return result.fail("Arquivo de atualizacao invalido. Baixe novamente.", "SHA-256 diferente do manifesto.");
+            }
+        }
+        PackageInfo info = readApkPackageInfo(apk);
+        if (info == null || info.packageName == null) {
+            return result.fail("Arquivo de atualizacao invalido. Baixe novamente.", "PackageManager nao reconheceu o APK.");
+        }
+        result.packageName = info.packageName;
+        result.versionCode = apkVersionCode(info);
+        result.minSdk = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && info.applicationInfo != null
+                ? info.applicationInfo.minSdkVersion
+                : 0;
+        int currentCode;
+        try {
+            currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+        } catch (Exception ex) {
+            currentCode = BuildConfig.VERSION_CODE;
+        }
+        result.currentVersionCode = currentCode;
+        Log.d(UPDATE_LOG_TAG, "apk package=" + result.packageName + " version=" + result.versionCode
+                + " current=" + currentCode + " minSdk=" + result.minSdk + " fileLength=" + result.fileLength);
+        if (!getPackageName().equals(info.packageName)) {
+            return result.fail("Esta atualizacao nao pertence ao nBTChat.", "Package esperado " + getPackageName() + ", recebido " + info.packageName + ".");
+        }
+        if (strictVersion && result.versionCode <= currentCode) {
+            return result.fail("A atualizacao baixada nao e mais nova que a versao instalada.", "versionCode " + result.versionCode + " <= " + currentCode + ".");
+        }
+        if (result.minSdk > 0 && result.minSdk > Build.VERSION.SDK_INT) {
+            return result.fail("Esta atualizacao nao e compativel com este Android.", "minSdk " + result.minSdk + " > SDK " + Build.VERSION.SDK_INT + ".");
+        }
+        if (!sameAppSignature(apk)) {
+            return result.fail("Esta atualizacao foi assinada com uma chave diferente.", "Assinatura do APK difere da versao instalada.");
+        }
+        result.ok = true;
+        result.reason = "APK valido.";
+        return result;
+    }
+
+    private PackageInfo readApkPackageInfo(File apk) {
+        try {
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? PackageManager.GET_SIGNING_CERTIFICATES
+                    : PackageManager.GET_SIGNATURES;
+            return getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), flags);
+        } catch (Exception ex) {
+            Log.e(UPDATE_LOG_TAG, "failed to parse apk", ex);
+            return null;
+        }
+    }
+
+    private long apkVersionCode(PackageInfo info) {
+        if (info == null) {
+            return 0L;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return info.getLongVersionCode();
+        }
+        return info.versionCode;
+    }
+
+    private boolean hasZipHeader(File file) {
+        try (FileInputStream input = new FileInputStream(file)) {
+            int first = input.read();
+            int second = input.read();
+            return first == 'P' && second == 'K';
+        } catch (Exception ex) {
+            Log.e(UPDATE_LOG_TAG, "failed to read apk header", ex);
+            return false;
+        }
+    }
+
+    private String sha256(File file) {
+        try (InputStream input = new FileInputStream(file)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+            StringBuilder builder = new StringBuilder();
+            for (byte b : digest.digest()) {
+                builder.append(String.format(Locale.ROOT, "%02x", b & 0xff));
+            }
+            return builder.toString();
+        } catch (Exception ex) {
+            Log.e(UPDATE_LOG_TAG, "failed to calculate sha256", ex);
+            return "";
+        }
+    }
+
+    private boolean sameAppSignature(File apk) {
+        try {
+            PackageInfo installed = getPackageManager().getPackageInfo(getPackageName(),
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                            ? PackageManager.GET_SIGNING_CERTIFICATES
+                            : PackageManager.GET_SIGNATURES);
+            PackageInfo downloaded = readApkPackageInfo(apk);
+            Signature[] installedSignatures = packageSignatures(installed);
+            Signature[] downloadedSignatures = packageSignatures(downloaded);
+            if (installedSignatures.length == 0 || downloadedSignatures.length == 0) {
+                Log.d(UPDATE_LOG_TAG, "signature comparison unavailable");
+                return true;
+            }
+            if (installedSignatures.length != downloadedSignatures.length) {
+                return false;
+            }
+            for (Signature installedSignature : installedSignatures) {
+                boolean found = false;
+                for (Signature downloadedSignature : downloadedSignatures) {
+                    if (installedSignature.equals(downloadedSignature)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception ex) {
+            Log.e(UPDATE_LOG_TAG, "signature comparison failed", ex);
+            return true;
+        }
+    }
+
+    private Signature[] packageSignatures(PackageInfo info) {
+        if (info == null) {
+            return new Signature[0];
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && info.signingInfo != null) {
+            return info.signingInfo.hasMultipleSigners()
+                    ? info.signingInfo.getApkContentsSigners()
+                    : info.signingInfo.getSigningCertificateHistory();
+        }
+        return info.signatures == null ? new Signature[0] : info.signatures;
+    }
+
+    private void deleteInvalidUpdate(File apk) {
+        if (apk != null && apk.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            apk.delete();
+        }
     }
 
     private void resumePendingUpdateFlowIfNeeded() {
@@ -8819,6 +9038,16 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (hasPendingDownloadedApk(state)) {
             File apk = pendingApkFile(state);
+            ApkValidationResult validation = validateDownloadedApk(apk, state.totalBytes, true);
+            if (!validation.ok) {
+                deleteInvalidUpdate(apk);
+                clearPendingUpdateState();
+                if (validation.reason.contains("nao e mais nova")) {
+                    return;
+                }
+                showUpdateDiagnosticDialog(validation, true);
+                return;
+            }
             if (state.waitingPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
                 showInstallPermissionDialog(apk);
             } else {
@@ -8828,11 +9057,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (state.downloadComplete && !hasPendingDownloadedApk(state)) {
             File broken = pendingApkFile(state);
-            if (broken != null && broken.exists()) {
-                //noinspection ResultOfMethodCallIgnored
-                broken.delete();
-            }
-            showUpdateErrorDialog("Arquivo de atualizacao invalido. Baixe novamente.");
+            ApkValidationResult validation = validateDownloadedApk(broken, state.totalBytes, false);
+            deleteInvalidUpdate(broken);
+            clearPendingUpdateState();
+            showUpdateDiagnosticDialog(validation, true);
         } else if (!state.lastError.trim().isEmpty()) {
             showUpdateErrorDialog("Nao foi possivel baixar a atualizacao.");
         }
@@ -8879,6 +9107,44 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         updateDialog.show();
     }
 
+    private void showUpdateDiagnosticDialog(ApkValidationResult result, boolean allowRetry) {
+        dismissUpdateDialog();
+        StringBuilder message = new StringBuilder();
+        String reason = result == null || result.reason.trim().isEmpty()
+                ? "Arquivo de atualizacao invalido. Baixe novamente."
+                : result.reason;
+        message.append(reason);
+        if (result != null) {
+            message.append("\n\nArquivo: ").append(result.fileName == null || result.fileName.isEmpty() ? "nBTChat.apk" : result.fileName);
+            message.append("\nTamanho: ").append(formatBytes(result.fileLength));
+            if (result.expectedBytes > 0L) {
+                message.append(" de ").append(formatBytes(result.expectedBytes));
+            }
+            if (!result.packageName.trim().isEmpty()) {
+                message.append("\nPacote: ").append(result.packageName);
+            }
+            if (result.versionCode > 0L) {
+                message.append("\nVersao do APK: ").append(result.versionCode);
+            }
+            message.append("\nVersao atual: ").append(BuildConfig.VERSION_CODE);
+            if (!result.details.trim().isEmpty()) {
+                message.append("\n\nDetalhe: ").append(result.details);
+            }
+        }
+        message.append("\n\nSe o pacote foi assinado com outra chave, o Android bloqueia a instalacao.");
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle("Atualizacao")
+                .setMessage(message.toString())
+                .setNegativeButton("Agora nao", null);
+        if (allowRetry) {
+            builder.setPositiveButton("Baixar novamente", (dialog, which) -> downloadAndInstallUpdateApk());
+        }
+        updateDialog = builder.create();
+        updateDialog.setOnShowListener(dialog -> updateDialog.setCanceledOnTouchOutside(false));
+        updateDialog.setCancelable(false);
+        updateDialog.show();
+    }
+
     private void openInstallPermissionSettings(File apk) {
         savePendingUpdateState(updateVersionName, updateApkUrl, apk == null ? "" : apk.getAbsolutePath(),
                 true, apk == null ? 0L : apk.length(), apk == null ? 0L : apk.length(), true, "", System.currentTimeMillis());
@@ -8910,8 +9176,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void installDownloadedUpdate(File apk) {
-        if (apk == null || !apk.exists() || apk.length() <= 0L) {
-            Toast.makeText(this, "APK de atualizacao nao encontrado.", Toast.LENGTH_LONG).show();
+        ApkValidationResult validation = validateDownloadedApk(apk, apk == null ? 0L : apk.length(), true);
+        if (!validation.ok) {
+            Log.e(UPDATE_LOG_TAG, "blocked install: " + validation.reason + " details=" + validation.details);
+            deleteInvalidUpdate(apk);
+            clearPendingUpdateState();
+            showUpdateDiagnosticDialog(validation, true);
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
@@ -8925,12 +9195,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Uri uri = BackupFileProvider.uriFor(this, apk);
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.setDataAndType(uri, "application/vnd.android.package-archive");
+        intent.setClipData(ClipData.newUri(getContentResolver(), "nBTChat update", uri));
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(intent);
         } catch (Exception ex) {
-            Toast.makeText(this, "Nao encontrei o instalador do Android.", Toast.LENGTH_LONG).show();
+            Log.e(UPDATE_LOG_TAG, "failed to open package installer", ex);
+            showUpdateDiagnosticDialog(validation.fail("Nao encontrei o instalador do Android.", ex.getMessage()), false);
         }
     }
 
@@ -8978,6 +9250,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     String apkUrl = json.optString("apkUrl", updateApkUrl);
                     String changelog = json.optString("changelog", "");
                     String origin = json.optString("origin", "GitHub Pages oficial do nBTChat");
+                    String sha256 = json.optString("sha256", "");
                     boolean critical = json.optBoolean("critical", false);
                     int currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
                     runOnUiThread(() -> {
@@ -8987,6 +9260,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         updateApkUrl = apkUrl;
                         updateChangelog = changelog;
                         updateOrigin = origin;
+                        updateSha256 = sha256;
                         if (updateAvailable && critical && settingsStore.shouldNotifyCriticalUpdate(latestName)) {
                             NotificationHelper.showCriticalUpdateNotification(this, latestName, updateApkUrl);
                         }
@@ -9737,6 +10011,42 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             this.waitingPermission = waitingPermission;
             this.lastError = lastError == null ? "" : lastError;
             this.startedAt = startedAt;
+        }
+    }
+
+    private static final class InvalidUpdateApkException extends Exception {
+        final ApkValidationResult result;
+
+        InvalidUpdateApkException(ApkValidationResult result) {
+            super(result == null ? "APK invalido" : result.reason);
+            this.result = result == null ? new ApkValidationResult(null, 0L).fail("Arquivo de atualizacao invalido.", "") : result;
+        }
+    }
+
+    private static final class ApkValidationResult {
+        boolean ok;
+        String reason = "";
+        String details = "";
+        String fileName = "";
+        long fileLength;
+        final long expectedBytes;
+        String packageName = "";
+        long versionCode;
+        int currentVersionCode;
+        int minSdk;
+        String sha256 = "";
+
+        ApkValidationResult(File file, long expectedBytes) {
+            this.fileName = file == null ? "" : file.getName();
+            this.fileLength = file != null && file.exists() ? file.length() : 0L;
+            this.expectedBytes = Math.max(0L, expectedBytes);
+        }
+
+        ApkValidationResult fail(String reason, String details) {
+            this.ok = false;
+            this.reason = reason == null ? "Arquivo de atualizacao invalido." : reason;
+            this.details = details == null ? "" : details;
+            return this;
         }
     }
 

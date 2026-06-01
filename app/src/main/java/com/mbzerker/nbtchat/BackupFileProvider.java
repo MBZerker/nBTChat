@@ -16,9 +16,12 @@ public final class BackupFileProvider extends ContentProvider {
     public static final String AUTHORITY = "com.mbzerker.nbtchat.backupfiles";
 
     public static Uri uriFor(Context context, File file) {
+        String parent = file == null || file.getParentFile() == null ? "" : file.getParentFile().getName();
+        String bucket = "updates".equals(parent) ? "updates" : "backups";
         return new Uri.Builder()
                 .scheme("content")
                 .authority(AUTHORITY)
+                .appendPath(bucket)
                 .appendPath(file.getName())
                 .build();
     }
@@ -78,8 +81,15 @@ public final class BackupFileProvider extends ContentProvider {
         if (name == null) {
             name = "";
         }
+        String bucket = "backups";
+        if (uri != null && uri.getPathSegments().size() >= 2) {
+            String first = uri.getPathSegments().get(0);
+            if ("updates".equals(first)) {
+                bucket = "updates";
+            }
+        }
         name = name.replace("/", "").replace("\\", "");
-        File dir = new File(getContext().getCacheDir(), "backups");
+        File dir = new File(getContext().getCacheDir(), bucket);
         return new File(dir, name);
     }
 }
