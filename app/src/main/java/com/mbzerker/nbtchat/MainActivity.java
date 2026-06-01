@@ -269,6 +269,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String updateChangelog = "";
     private String updateOrigin = "GitHub Pages oficial do nBTChat";
     private String updateSha256 = "";
+    private String updateSignatureSha256 = "";
     private MediaPlayer playingVoicePlayer;
     private File playingVoiceFile;
     private String playingVoiceId = "";
@@ -336,6 +337,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String palitinhosReturnFingerprint = "";
     private final Set<String> expiredPalitinhosGames = new HashSet<>();
     private final Set<String> expiredStoreInvites = new HashSet<>();
+    private final Set<String> temporarilyUnavailablePalitinhosGames = new HashSet<>();
+    private final Map<String, Long> palitinhosInviteWakeFailedAt = new HashMap<>();
 
     private final BroadcastReceiver messageChangedReceiver = new BroadcastReceiver() {
         @Override
@@ -3401,10 +3404,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         labelParams.setMargins(dp(12), 0, 0, 0);
         row.addView(label, labelParams);
         String presence = contactPresenceStatus(address);
-        String statusText = homePresenceConnecting.contains(address) ? "Conectando" : publicPresenceLabel(presence);
+        boolean recentFailure = isRecentPalitinhosInviteWakeFailure(address);
+        String statusText = homePresenceConnecting.contains(address)
+                ? "Tentando"
+                : (recentFailure ? "Falhou agora" : publicPresenceLabel(presence));
         String prefix = joined ? "Na sala\n" : (selected ? "Selecionado\n" : "");
         TextView status = text(prefix + statusText, 12,
-                homePresenceConnecting.contains(address) ? "#FACC15" : presenceColor(presence), Typeface.BOLD);
+                homePresenceConnecting.contains(address) ? "#FACC15" : (recentFailure ? "#F97316" : presenceColor(presence)), Typeface.BOLD);
         status.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         row.addView(status);
         row.setOnClickListener(v -> {
@@ -3419,6 +3425,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showPalitinhosInviteScreen();
         });
         return row;
+    }
+
+    private boolean isRecentPalitinhosInviteWakeFailure(String address) {
+        Long failedAt = palitinhosInviteWakeFailedAt.get(address);
+        return failedAt != null && System.currentTimeMillis() - failedAt < 18_000L;
     }
 
     private boolean palitinhosInviteeJoined(String address) {
@@ -3468,6 +3479,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if (btChatManager.canSendTo(address) || btChatManager.isConnectedTo(address)) {
             homePresenceConnecting.remove(address);
+            palitinhosInviteWakeFailedAt.remove(address);
             return;
         }
         if (homePresenceConnecting.contains(address)) {
@@ -3480,7 +3492,13 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         homePresenceConnecting.add(address);
         connectForAddress(address);
         uiHandler.postDelayed(() -> {
+            boolean stillDisconnected = !btChatManager.canSendTo(address) && !btChatManager.isConnectedTo(address);
             homePresenceConnecting.remove(address);
+            if (stillDisconnected) {
+                palitinhosInviteWakeFailedAt.put(address, System.currentTimeMillis());
+            } else {
+                palitinhosInviteWakeFailedAt.remove(address);
+            }
             if ("palitinhos_invite".equals(currentScreen)) {
                 showPalitinhosInviteScreen();
             } else if ("palitinhos_lobby".equals(currentScreen)) {
@@ -6183,6 +6201,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String gameId = json.optString("gameId", "");
         String inviteId = storeInviteId(json);
         boolean expired = json.optBoolean("expired", false) || isStoreInviteExpired(inviteId);
+        boolean temporary = !expired && temporarilyUnavailablePalitinhosGames.contains(gameId);
         TextView title = text(expired ? "Palitinhos" : "Convite para Palitinhos", 16, mine ? "#FFFFFF" : primary(), Typeface.BOLD);
         title.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play_24, 0, 0, 0);
         title.setCompoundDrawablePadding(dp(8));
@@ -6190,9 +6209,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         String detail = expired
                 ? "Convite para Palitinhos expirado."
+                : (temporary
+                ? "Nao foi possivel entrar agora. Tente novamente."
                 : ("ready".equals(type)
                 ? "Jogador marcou presenca."
-                : ("join".equals(type) ? "Jogador entrou no lobby." : hostName + " chamou voce para uma partida."));
+                : ("join".equals(type) ? "Jogador entrou no lobby." : hostName + " chamou voce para uma partida.")));
         bubble.addView(text(detail, 12, mine ? "#D7FBE8" : secondary(), Typeface.NORMAL), topMargin(dp(2)));
 
         if (mine || expired || !"invite".equals(type)) {
@@ -6218,12 +6239,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String inviteId = storeInviteId(json);
         if (gameId.trim().isEmpty() || isStoreInviteExpired(inviteId) || json.optBoolean("expired", false)) {
             Toast.makeText(this, gameId.trim().isEmpty() ? "Convite invalido." : "Convite expirado.", Toast.LENGTH_LONG).show();
-            if (!gameId.trim().isEmpty()) {
-                markPalitinhosGameExpired(gameId);
-                renderChatHistory(false);
-            }
             return;
         }
+        temporarilyUnavailablePalitinhosGames.remove(gameId);
         palitinhosReturnScreen = "chat";
         palitinhosReturnAddress = currentRemoteAddress == null ? "" : currentRemoteAddress;
         palitinhosReturnProfile = currentRemoteProfile == null ? UserProfile.empty() : currentRemoteProfile;
@@ -6253,8 +6271,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             if (gameId.equals(pendingPalitinhosJoinGameId)) {
                 pendingPalitinhosJoinBody = "";
                 pendingPalitinhosJoinGameId = "";
-                markPalitinhosGameExpired(gameId);
-                Toast.makeText(this, "Nao foi possivel entrar. Convite expirado ou host indisponivel.", Toast.LENGTH_LONG).show();
+                temporarilyUnavailablePalitinhosGames.add(gameId);
+                Toast.makeText(this, "Nao foi possivel entrar agora. Tente novamente.", Toast.LENGTH_LONG).show();
                 if ("chat".equals(currentScreen) && gameId.equals(palitinhosGameId)) {
                     renderChatHistory(false);
                 }
@@ -7017,6 +7035,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             if (!palitinhosHostMode && gameId.equals(pendingPalitinhosJoinGameId) && !expiredPalitinhosGames.contains(gameId)) {
                 pendingPalitinhosJoinBody = "";
                 pendingPalitinhosJoinGameId = "";
+                temporarilyUnavailablePalitinhosGames.remove(gameId);
                 applyPalitinhosRoomState(json);
                 for (int i = 0; i < 6; i++) {
                     palitinhosJoined[i] = palitinhosJoined[i] || i == 0 || i == localPalitinhosPlayerIndex;
@@ -7035,10 +7054,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 pendingPalitinhosJoinGameId = "";
             }
             String reason = json.optString("reason", "");
-            if (("expired".equals(reason) || "not_invited".equals(reason)) && !gameId.isEmpty()) {
+            if ("expired".equals(reason) && !gameId.isEmpty()) {
                 markPalitinhosGameExpired(gameId);
+            } else if (!gameId.isEmpty()) {
+                temporarilyUnavailablePalitinhosGames.add(gameId);
             }
-            Toast.makeText(this, "started".equals(reason) ? "A partida ja comecou." : "Convite expirado.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, palitinhosJoinRejectMessage(reason), Toast.LENGTH_LONG).show();
             if ("chat".equals(currentScreen) && address.equals(currentRemoteAddress)) {
                 renderChatHistory(false);
             }
@@ -7139,7 +7160,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 try {
                     JSONObject reply = basePalitinhosEvent("join_reject");
                     reply.put("gameId", gameId);
-                    reply.put("reason", "expired");
+                    reply.put("reason", "unknown_room");
                     sendPalitinhosInternal(address, reply.toString());
                 } catch (JSONException ignored) {
                 }
@@ -7152,6 +7173,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 try {
                     JSONObject reply = basePalitinhosEvent("join_reject");
                     reply.put("reason", "not_invited");
+                    reply.put("gameId", gameId);
                     sendPalitinhosInternal(address, reply.toString());
                 } catch (JSONException ignored) {
                 }
@@ -7172,10 +7194,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         if ("join_request".equals(type)) {
             try {
-                if (palitinhosRoomStarted) {
-                    palitinhosJoined[playerIndex] = true;
-                } else {
-                    palitinhosJoined[playerIndex] = true;
+                palitinhosJoined[playerIndex] = true;
+                if (!palitinhosRoomStarted) {
                     palitinhosReady[playerIndex] = false;
                 }
                 JSONObject reply = basePalitinhosEvent("join_accept");
@@ -7238,6 +7258,22 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         broadcastPalitinhosLobbyState();
         return true;
+    }
+
+    private String palitinhosJoinRejectMessage(String reason) {
+        if ("expired".equals(reason)) {
+            return "Convite expirado.";
+        }
+        if ("started".equals(reason)) {
+            return "A partida ja comecou.";
+        }
+        if ("not_invited".equals(reason)) {
+            return "Este convite nao esta valido para este aparelho.";
+        }
+        if ("unknown_room".equals(reason)) {
+            return "Esta sala nao esta disponivel agora.";
+        }
+        return "Nao foi possivel entrar agora. Tente novamente.";
     }
 
     private void updateChatHeaderStatus() {
@@ -7488,6 +7524,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         String fingerprintValue = fingerprint == null ? "" : fingerprint;
         lastConnectAttemptAt.remove(address);
         homePresenceConnecting.remove(address);
+        palitinhosInviteWakeFailedAt.remove(address);
         onlineAddresses.add(address);
         contactPresence.put(address, AppSettingsStore.PRESENCE_ONLINE);
         profileStore.saveContact(address, profileValue);
@@ -7850,8 +7887,117 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         root.addView(logCard, topMargin(dp(12)));
 
+        LinearLayout bluetoothCard = vertical();
+        bluetoothCard.setPadding(dp(14), dp(14), dp(14), dp(14));
+        bluetoothCard.setBackground(rounded(surface(), dp(12), border()));
+        bluetoothCard.addView(text("Bluetooth pareado", 17, primary(), Typeface.BOLD));
+        bluetoothCard.addView(text("Use para diagnosticar pares que ficaram presos sem apagar mensagens, perfil ou pareamento do Android.", 13, secondary(), Typeface.NORMAL), topMargin(dp(6)));
+        Map<String, UserProfile> contacts = profileStore.loadContacts();
+        if (contacts.isEmpty()) {
+            bluetoothCard.addView(text("Nenhum contato salvo.", 13, secondary(), Typeface.NORMAL), topMargin(dp(10)));
+        } else {
+            for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
+                bluetoothCard.addView(bluetoothDiagnosticRow(entry.getKey(), entry.getValue()), topMargin(dp(10)));
+            }
+        }
+        root.addView(bluetoothCard, topMargin(dp(12)));
+
         setContentView(scrollView);
         requestInsets(root);
+    }
+
+    private View bluetoothDiagnosticRow(String address, UserProfile profile) {
+        LinearLayout row = vertical();
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
+        row.setBackground(rounded(surfaceAlt(), dp(12), border()));
+        String name = profile != null && profile.isComplete() ? profile.getDisplayName() : safeName(address, "Contato");
+        row.addView(text(safeName(name, "Contato"), 15, primary(), Typeface.BOLD));
+        BtChatManager.DeviceCandidate candidate = btChatManager == null ? null : btChatManager.getPairedCandidate(address);
+        StringBuilder details = new StringBuilder();
+        details.append("Endereco: ").append(address);
+        details.append("\nPareado no Android: ").append(candidate == null ? "nao" : "sim");
+        details.append("\nConectado: ").append(btChatManager != null && btChatManager.isConnectedTo(address) ? "sim" : "nao");
+        details.append("\nPode enviar: ").append(btChatManager != null && btChatManager.canSendTo(address) ? "sim" : "nao");
+        details.append("\nBLE por perto: ").append(isBlePeerNearby(address) ? "sim" : "nao");
+        details.append("\nTentativa recente: ").append(lastConnectAttemptAt.containsKey(address) || homePresenceConnecting.contains(address) ? "sim" : "nao");
+        details.append("\nPendentes na fila: ").append(pendingOutgoingCount(address));
+        String lastError = btChatManager == null ? "" : btChatManager.lastConnectionError(address);
+        if (!lastError.trim().isEmpty()) {
+            details.append("\nUltimo erro: ").append(lastError);
+        }
+        TextView detailView = text(details.toString(), 12, secondary(), Typeface.NORMAL);
+        detailView.setLineSpacing(dp(2), 1f);
+        row.addView(detailView, topMargin(dp(6)));
+
+        LinearLayout actions = horizontal();
+        Button test = pillButton("Testar", "#16A34A", "#FFFFFF");
+        test.setTextSize(12);
+        test.setOnClickListener(v -> {
+            forceBluetoothReconnect(address);
+            Toast.makeText(this, "Tentando conectar com " + safeName(name, "contato") + ".", Toast.LENGTH_SHORT).show();
+            showMeshDiagnosticsScreen();
+        });
+        actions.addView(test, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button reset = pillButton("Limpar estado", surface(), primary());
+        reset.setTextSize(12);
+        reset.setOnClickListener(v -> confirmClearBluetoothState(address, name));
+        LinearLayout.LayoutParams resetParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        resetParams.setMargins(dp(8), 0, 0, 0);
+        actions.addView(reset, resetParams);
+        row.addView(actions, topMargin(dp(10)));
+        return row;
+    }
+
+    private int pendingOutgoingCount(String address) {
+        int count = 0;
+        for (PendingOutgoing outgoing : pendingOutgoing) {
+            if (outgoing != null && address != null && address.equals(outgoing.address)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void forceBluetoothReconnect(String address) {
+        if (address == null || address.trim().isEmpty() || btChatManager == null) {
+            return;
+        }
+        lastConnectAttemptAt.remove(address);
+        homePresenceConnecting.remove(address);
+        palitinhosInviteWakeFailedAt.remove(address);
+        BtChatManager.DeviceCandidate candidate = btChatManager.getPairedCandidate(address);
+        if (candidate != null) {
+            btChatManager.connect(candidate);
+        }
+    }
+
+    private void confirmClearBluetoothState(String address, String name) {
+        new AlertDialog.Builder(this)
+                .setTitle("Limpar estado interno?")
+                .setMessage("Isto nao apaga conversa, perfil nem pareamento do Android. Apenas libera tentativas internas presas para " + safeName(name, "este contato") + ".")
+                .setPositiveButton("Limpar", (dialog, which) -> {
+                    clearBluetoothContactState(address);
+                    Toast.makeText(this, "Estado interno limpo.", Toast.LENGTH_SHORT).show();
+                    showMeshDiagnosticsScreen();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void clearBluetoothContactState(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        lastConnectAttemptAt.remove(address);
+        homePresenceConnecting.remove(address);
+        homePresenceProbeAddresses.remove(address);
+        palitinhosInviteWakeAt.remove(address);
+        palitinhosInviteWakeFailedAt.remove(address);
+        lastWakeAttemptAt.remove(address);
+        lastPairRepairAt.remove(address);
+        if (btChatManager != null) {
+            btChatManager.resetConnectionState(address);
+        }
     }
 
     private void shareBackupZip() {
@@ -8662,8 +8808,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 });
             } catch (InvalidUpdateApkException ex) {
                 Log.e(UPDATE_LOG_TAG, "invalid downloaded apk: " + ex.result.reason + " details=" + ex.result.details);
-                deleteInvalidUpdate(apk);
-                clearPendingUpdateState();
+                if (!ex.result.signatureMismatch) {
+                    deleteInvalidUpdate(apk);
+                    clearPendingUpdateState();
+                } else {
+                    savePendingUpdateState(updateVersionName, updateApkUrl, apk.getAbsolutePath(), true, Math.max(0L, apk.length()), Math.max(0L, apk.length()), false, ex.result.reason, updateDownloadStartedAt);
+                }
                 runOnUiThread(() -> {
                     updateDownloadInProgress = false;
                     dismissDownloadOverlay(overlay);
@@ -8910,8 +9060,14 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (result.minSdk > 0 && result.minSdk > Build.VERSION.SDK_INT) {
             return result.fail("Esta atualizacao nao e compativel com este Android.", "minSdk " + result.minSdk + " > SDK " + Build.VERSION.SDK_INT + ".");
         }
-        if (!sameAppSignature(apk)) {
-            return result.fail("Esta atualizacao foi assinada com uma chave diferente.", "Assinatura do APK difere da versao instalada.");
+        if (!sameAppSignature(apk, result)) {
+            result.signatureMismatch = true;
+            return result.fail("Esta atualizacao usa uma assinatura diferente da versao instalada. Faca backup antes de reinstalar.", "Assinatura do APK difere da versao instalada.");
+        }
+        if (!updateSignatureSha256.trim().isEmpty() && !result.downloadedSignatureSha256.trim().isEmpty()
+                && !updateSignatureSha256.equalsIgnoreCase(result.downloadedSignatureSha256)) {
+            result.signatureMismatch = true;
+            return result.fail("A assinatura desta atualizacao nao bate com a origem esperada.", "signatureSha256 do manifesto difere do APK.");
         }
         result.ok = true;
         result.reason = "APK valido.";
@@ -8970,7 +9126,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
     }
 
-    private boolean sameAppSignature(File apk) {
+    private boolean sameAppSignature(File apk, ApkValidationResult result) {
         try {
             PackageInfo installed = getPackageManager().getPackageInfo(getPackageName(),
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
@@ -8979,6 +9135,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             PackageInfo downloaded = readApkPackageInfo(apk);
             Signature[] installedSignatures = packageSignatures(installed);
             Signature[] downloadedSignatures = packageSignatures(downloaded);
+            if (result != null) {
+                result.installedSignatureSha256 = signatureSha256(installedSignatures);
+                result.downloadedSignatureSha256 = signatureSha256(downloadedSignatures);
+                Log.d(UPDATE_LOG_TAG, "installedSignature=" + result.installedSignatureSha256
+                        + " downloadedSignature=" + result.downloadedSignatureSha256);
+            }
             if (installedSignatures.length == 0 || downloadedSignatures.length == 0) {
                 Log.d(UPDATE_LOG_TAG, "signature comparison unavailable");
                 return true;
@@ -9002,6 +9164,23 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         } catch (Exception ex) {
             Log.e(UPDATE_LOG_TAG, "signature comparison failed", ex);
             return true;
+        }
+    }
+
+    private String signatureSha256(Signature[] signatures) {
+        if (signatures == null || signatures.length == 0) {
+            return "";
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(signatures[0].toByteArray());
+            StringBuilder builder = new StringBuilder();
+            for (byte b : digest.digest()) {
+                builder.append(String.format(Locale.ROOT, "%02x", b & 0xff));
+            }
+            return builder.toString();
+        } catch (Exception ex) {
+            return "";
         }
     }
 
@@ -9127,22 +9306,49 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 message.append("\nVersao do APK: ").append(result.versionCode);
             }
             message.append("\nVersao atual: ").append(BuildConfig.VERSION_CODE);
+            if (!result.installedSignatureSha256.trim().isEmpty()) {
+                message.append("\nAssinatura instalada: ").append(shortHash(result.installedSignatureSha256));
+            }
+            if (!result.downloadedSignatureSha256.trim().isEmpty()) {
+                message.append("\nAssinatura baixada: ").append(shortHash(result.downloadedSignatureSha256));
+            }
             if (!result.details.trim().isEmpty()) {
                 message.append("\n\nDetalhe: ").append(result.details);
             }
         }
-        message.append("\n\nSe o pacote foi assinado com outra chave, o Android bloqueia a instalacao.");
+        if (result != null && result.signatureMismatch) {
+            message.append("\n\nO Android bloqueia atualizacao com assinatura diferente. Faca backup antes de desinstalar a versao atual.");
+        } else {
+            message.append("\n\nSe o pacote foi assinado com outra chave, o Android bloqueia a instalacao.");
+        }
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
                 .setTitle("Atualizacao")
                 .setMessage(message.toString())
                 .setNegativeButton("Agora nao", null);
+        if (result != null && result.signatureMismatch) {
+            builder.setNeutralButton("Fazer backup", (dialog, which) -> shareBackupZip());
+        }
         if (allowRetry) {
-            builder.setPositiveButton("Baixar novamente", (dialog, which) -> downloadAndInstallUpdateApk());
+            builder.setPositiveButton(result != null && result.signatureMismatch ? "Abrir pagina oficial" : "Baixar novamente",
+                    (dialog, which) -> {
+                        if (result != null && result.signatureMismatch) {
+                            openExternalLink(Uri.parse(updatePageUrl));
+                        } else {
+                            downloadAndInstallUpdateApk();
+                        }
+                    });
         }
         updateDialog = builder.create();
         updateDialog.setOnShowListener(dialog -> updateDialog.setCanceledOnTouchOutside(false));
         updateDialog.setCancelable(false);
         updateDialog.show();
+    }
+
+    private String shortHash(String hash) {
+        if (hash == null || hash.length() <= 16) {
+            return hash == null ? "" : hash;
+        }
+        return hash.substring(0, 8) + "..." + hash.substring(hash.length() - 8);
     }
 
     private void openInstallPermissionSettings(File apk) {
@@ -9179,8 +9385,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         ApkValidationResult validation = validateDownloadedApk(apk, apk == null ? 0L : apk.length(), true);
         if (!validation.ok) {
             Log.e(UPDATE_LOG_TAG, "blocked install: " + validation.reason + " details=" + validation.details);
-            deleteInvalidUpdate(apk);
-            clearPendingUpdateState();
+            if (!validation.signatureMismatch) {
+                deleteInvalidUpdate(apk);
+                clearPendingUpdateState();
+            }
             showUpdateDiagnosticDialog(validation, true);
             return;
         }
@@ -9251,6 +9459,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     String changelog = json.optString("changelog", "");
                     String origin = json.optString("origin", "GitHub Pages oficial do nBTChat");
                     String sha256 = json.optString("sha256", "");
+                    String signatureSha256 = json.optString("signatureSha256", "");
                     boolean critical = json.optBoolean("critical", false);
                     int currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
                     runOnUiThread(() -> {
@@ -9261,6 +9470,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                         updateChangelog = changelog;
                         updateOrigin = origin;
                         updateSha256 = sha256;
+                        updateSignatureSha256 = signatureSha256;
                         if (updateAvailable && critical && settingsStore.shouldNotifyCriticalUpdate(latestName)) {
                             NotificationHelper.showCriticalUpdateNotification(this, latestName, updateApkUrl);
                         }
@@ -10035,6 +10245,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         int currentVersionCode;
         int minSdk;
         String sha256 = "";
+        boolean signatureMismatch;
+        String installedSignatureSha256 = "";
+        String downloadedSignatureSha256 = "";
 
         ApkValidationResult(File file, long expectedBytes) {
             this.fileName = file == null ? "" : file.getName();

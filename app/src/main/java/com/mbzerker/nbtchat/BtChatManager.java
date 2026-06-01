@@ -103,6 +103,7 @@ public final class BtChatManager {
     private boolean nearbyDiscoveryMode;
     private final Set<String> pendingServiceChecks = new HashSet<>();
     private final Map<String, BluetoothDevice> serviceCheckDevices = new HashMap<>();
+    private final Map<String, String> lastConnectionErrors = new HashMap<>();
 
     private final BroadcastReceiver discoveryReceiver = new BroadcastReceiver() {
         @Override
@@ -430,6 +431,14 @@ public final class BtChatManager {
         connectThread.start();
     }
 
+    public String lastConnectionError(String address) {
+        if (address == null) {
+            return "";
+        }
+        String error = lastConnectionErrors.get(address);
+        return error == null ? "" : error;
+    }
+
     public void sendMessage(String body) {
         sendChatMessage("", Long.toString(System.currentTimeMillis()), MessageStore.KIND_TEXT, body, "", 0L, System.currentTimeMillis(), "", "");
     }
@@ -507,6 +516,23 @@ public final class BtChatManager {
             connectedThread = null;
         }
         postState("Conexao encerrada.");
+    }
+
+    public void resetConnectionState(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        if (connectThread != null) {
+            connectThread.cancel();
+            connectThread = null;
+        }
+        ConnectedThread thread = connectedThread;
+        if (thread != null && address.equals(thread.getRemoteAddress())) {
+            thread.cancel();
+            connectedThread = null;
+        }
+        lastConnectionErrors.remove(address);
+        postState("Estado interno de conexao limpo.");
     }
 
     @SuppressLint("MissingPermission")
@@ -757,10 +783,14 @@ public final class BtChatManager {
             } catch (IOException ex) {
                 closeQuietly(socket);
                 if (running) {
+                    String address = safeAddress(device);
+                    lastConnectionErrors.put(address, ex.getClass().getSimpleName() + ": " + ex.getMessage());
                     postError("Nao foi possivel conectar. Confirme se o outro aparelho esta visivel, pareado e com o nBTChat aberto.");
                 }
             } catch (SecurityException ex) {
                 if (running) {
+                    String address = safeAddress(device);
+                    lastConnectionErrors.put(address, "Permissao Bluetooth negada.");
                     postError("Permissao Bluetooth negada para conectar.");
                 }
             }
@@ -814,6 +844,7 @@ public final class BtChatManager {
             running = false;
             closeQuietly(socket);
         }
+
     }
 
     private final class ConnectedThread extends Thread {

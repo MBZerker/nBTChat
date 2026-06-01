@@ -1,10 +1,11 @@
 {
-  "versionCode": 74,
-  "versionName": "0.4.52",
+  "versionCode": 75,
+  "versionName": "0.4.53",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.52.apk",
-  "sha256": "b1a4313776f5e03405fde8ba381c2c880ecd61cd239368b1829be3988282261a",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.53.apk",
+  "sha256": "7cbb0efe1216cd67a9c1e8b83df92cb89e880fd8d8371b5629893ee1c5908966",
+  "signatureSha256": "0fc20e3b700b71858ac732a16aa4a322e9efe6d03bd92f0a6b3d703debd28316",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Corrige instalacao de update baixado, valida APK antes do instalador e detecta arquivo invalido."
+  "changelog": "Corrige convite Palitinhos expirando indevidamente, adiciona diagnostico Bluetooth por contato e melhora diagnostico de assinatura do update."
 }
