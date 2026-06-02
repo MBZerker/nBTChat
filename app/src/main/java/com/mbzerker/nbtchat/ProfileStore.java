@@ -115,6 +115,14 @@ public final class ProfileStore {
         return fingerprintPrefs.getString(address, "");
     }
 
+    public void removeTrust(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        fingerprintPrefs.edit().remove(address).apply();
+        identityPrefs.edit().remove(address).apply();
+    }
+
     public void saveIdentity(String address, String deviceId, String identityPublicKey) {
         ContactIdentity existing = loadIdentity(address);
         saveIdentity(address, deviceId, identityPublicKey, existing.bluetoothName);

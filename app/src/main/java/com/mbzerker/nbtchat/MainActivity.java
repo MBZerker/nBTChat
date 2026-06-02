@@ -480,7 +480,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (btChatManager != null && !isChangingConfigurations()) {
             stopScannerDiscoveryCycle();
             btChatManager.stopDiscovery();
-            btChatManager.stop();
+            boolean keepBluetoothAlive = settingsStore.backgroundAvailable() || btChatManager.hasPendingConnections();
+            if (!keepBluetoothAlive) {
+                btChatManager.stop();
+            }
         }
         if (!settingsStore.backgroundAvailable()) {
             stopBlePresence();
@@ -8100,6 +8103,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         bluetoothCard.setBackground(rounded(surface(), dp(12), border()));
         bluetoothCard.addView(text("Bluetooth pareado", 17, primary(), Typeface.BOLD));
         bluetoothCard.addView(text("Use para diagnosticar pares que ficaram presos sem apagar mensagens, perfil ou pareamento do Android.", 13, secondary(), Typeface.NORMAL), topMargin(dp(6)));
+        Button copyReport = pillButton("Copiar relatorio", "#16A34A", "#FFFFFF");
+        copyReport.setOnClickListener(v -> copyToClipboard(buildBluetoothDiagnosticReport(), true));
+        bluetoothCard.addView(copyReport, topMargin(dp(12)));
         Map<String, UserProfile> contacts = profileStore.loadContacts();
         if (contacts.isEmpty()) {
             bluetoothCard.addView(text("Nenhum contato salvo.", 13, secondary(), Typeface.NORMAL), topMargin(dp(10)));
@@ -8124,10 +8130,17 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         StringBuilder details = new StringBuilder();
         details.append("Endereco: ").append(address);
         details.append("\nPareado no Android: ").append(candidate == null ? "nao" : "sim");
+        details.append("\nEstado pareamento: ").append(btChatManager == null ? "desconhecido" : btChatManager.bondStateLabel(address));
         details.append("\nConectado: ").append(btChatManager != null && btChatManager.isConnectedTo(address) ? "sim" : "nao");
         details.append("\nPode enviar: ").append(btChatManager != null && btChatManager.canSendTo(address) ? "sim" : "nao");
         details.append("\nBLE por perto: ").append(isBlePeerNearby(address) ? "sim" : "nao");
         details.append("\nTentativa recente: ").append(lastConnectAttemptAt.containsKey(address) || homePresenceConnecting.contains(address) ? "sim" : "nao");
+        details.append("\nTentativa ativa: ").append(btChatManager != null && btChatManager.hasPendingConnectionOrBond(address) ? "sim" : "nao");
+        details.append("\nBloqueado: ").append(profileStore.isBlocked(address) ? "sim" : "nao");
+        details.append("\nSilenciado: ").append(profileStore.isMuted(address) ? "sim" : "nao");
+        details.append("\nFingerprint: ").append(shortValue(profileStore.loadFingerprint(address)));
+        ProfileStore.ContactIdentity identity = profileStore.loadIdentity(address);
+        details.append("\nIdentidade salva: ").append(identity.deviceId.isEmpty() && identity.identityPublicKey.isEmpty() ? "nao" : "sim");
         details.append("\nPendentes na fila: ").append(pendingOutgoingCount(address));
         String lastError = btChatManager == null ? "" : btChatManager.lastConnectionError(address);
         if (!lastError.trim().isEmpty()) {
@@ -8153,6 +8166,19 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         resetParams.setMargins(dp(8), 0, 0, 0);
         actions.addView(reset, resetParams);
         row.addView(actions, topMargin(dp(10)));
+
+        LinearLayout trustActions = horizontal();
+        Button trust = pillButton("Reset confianca", surface(), primary());
+        trust.setTextSize(12);
+        trust.setOnClickListener(v -> confirmResetContactTrust(address, name));
+        trustActions.addView(trust, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button unpair = pillButton("Desparear", "#DC2626", "#FFFFFF");
+        unpair.setTextSize(12);
+        unpair.setOnClickListener(v -> confirmUnpairContact(address, name));
+        LinearLayout.LayoutParams unpairParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        unpairParams.setMargins(dp(8), 0, 0, 0);
+        trustActions.addView(unpair, unpairParams);
+        row.addView(trustActions, topMargin(dp(8)));
         return row;
     }
 
@@ -8192,6 +8218,35 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 .show();
     }
 
+    private void confirmResetContactTrust(String address, String name) {
+        new AlertDialog.Builder(this)
+                .setTitle("Resetar confianca?")
+                .setMessage("Isto remove a chave de seguranca salva para " + safeName(name, "este contato") + ". Na proxima conexao, confira o codigo/fingerprint antes de confiar novamente.")
+                .setPositiveButton("Resetar", (dialog, which) -> {
+                    profileStore.removeTrust(address);
+                    pendingIdentityWarnings.remove(address);
+                    clearBluetoothContactState(address);
+                    Toast.makeText(this, "Confianca resetada.", Toast.LENGTH_SHORT).show();
+                    showMeshDiagnosticsScreen();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void confirmUnpairContact(String address, String name) {
+        new AlertDialog.Builder(this)
+                .setTitle("Desparear no Android?")
+                .setMessage("Isto remove o pareamento Bluetooth de " + safeName(name, "este contato") + ". A conversa e o perfil ficam salvos no nBTChat.")
+                .setPositiveButton("Desparear", (dialog, which) -> {
+                    boolean ok = btChatManager != null && btChatManager.unpair(address);
+                    clearBluetoothContactState(address);
+                    Toast.makeText(this, ok ? "Pareamento removido." : "Nao consegui remover o pareamento.", Toast.LENGTH_LONG).show();
+                    showMeshDiagnosticsScreen();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
     private void clearBluetoothContactState(String address) {
         if (address == null || address.trim().isEmpty()) {
             return;
@@ -8206,6 +8261,90 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (btChatManager != null) {
             btChatManager.resetConnectionState(address);
         }
+    }
+
+    private String buildBluetoothDiagnosticReport() {
+        StringBuilder report = new StringBuilder();
+        report.append("nBTChat Bluetooth diagnostic\n");
+        report.append("Device: ").append(Build.MANUFACTURER).append(" ").append(Build.MODEL)
+                .append(" Android ").append(Build.VERSION.RELEASE)
+                .append(" SDK ").append(Build.VERSION.SDK_INT).append("\n");
+        report.append("App: ").append(appVersionLabel()).append("\n");
+        report.append("Bluetooth available: ").append(btChatManager != null && btChatManager.isBluetoothAvailable()).append("\n");
+        report.append("Bluetooth enabled: ").append(btChatManager != null && btChatManager.isBluetoothEnabled()).append("\n");
+        report.append("Local name: ").append(btChatManager == null ? "" : btChatManager.localBluetoothName()).append("\n");
+        report.append("Local address: ").append(shortValue(btChatManager == null ? "" : btChatManager.localBluetoothAddress())).append("\n");
+        report.append("Background available: ").append(settingsStore.backgroundAvailable()).append("\n");
+        report.append("Permission BLUETOOTH_CONNECT: ").append(permissionGranted(Manifest.permission.BLUETOOTH_CONNECT)).append("\n");
+        report.append("Permission BLUETOOTH_SCAN: ").append(permissionGranted(Manifest.permission.BLUETOOTH_SCAN)).append("\n");
+        report.append("Permission BLUETOOTH_ADVERTISE: ").append(permissionGranted(Manifest.permission.BLUETOOTH_ADVERTISE)).append("\n");
+        report.append("\nContacts\n");
+        Map<String, UserProfile> contacts = profileStore.loadContacts();
+        for (Map.Entry<String, UserProfile> entry : contacts.entrySet()) {
+            String address = entry.getKey();
+            UserProfile profile = entry.getValue();
+            ProfileStore.ContactIdentity identity = profileStore.loadIdentity(address);
+            report.append("- ").append(profile != null && profile.isComplete() ? profile.getDisplayName() : "Contato")
+                    .append(" ").append(address).append("\n");
+            report.append("  bond=").append(btChatManager == null ? "unknown" : btChatManager.bondStateLabel(address))
+                    .append(" connected=").append(btChatManager != null && btChatManager.isConnectedTo(address))
+                    .append(" canSend=").append(btChatManager != null && btChatManager.canSendTo(address))
+                    .append(" pending=").append(btChatManager != null && btChatManager.hasPendingConnectionOrBond(address))
+                    .append(" bleNearby=").append(isBlePeerNearby(address)).append("\n");
+            report.append("  muted=").append(profileStore.isMuted(address))
+                    .append(" blocked=").append(profileStore.isBlocked(address))
+                    .append(" fingerprint=").append(shortValue(profileStore.loadFingerprint(address)))
+                    .append(" deviceId=").append(shortValue(identity.deviceId))
+                    .append(" key=").append(shortValue(identity.identityPublicKey)).append("\n");
+            String error = btChatManager == null ? "" : btChatManager.lastConnectionError(address);
+            if (!error.trim().isEmpty()) {
+                report.append("  lastError=").append(error).append("\n");
+            }
+        }
+        report.append("\nBluetooth events\n");
+        List<String> events = btChatManager == null ? new ArrayList<>() : btChatManager.diagnosticEvents();
+        if (events.isEmpty()) {
+            report.append("(none)\n");
+        } else {
+            for (String event : events) {
+                report.append(event).append("\n");
+            }
+        }
+        return report.toString();
+    }
+
+    private boolean permissionGranted(String permission) {
+        if (permission == null || permission.isEmpty()) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                && (Manifest.permission.BLUETOOTH_CONNECT.equals(permission)
+                || Manifest.permission.BLUETOOTH_SCAN.equals(permission)
+                || Manifest.permission.BLUETOOTH_ADVERTISE.equals(permission))) {
+            return true;
+        }
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private String appVersionLabel() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            long code = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
+            return info.versionName + " (" + code + ")";
+        } catch (Exception ex) {
+            return "desconhecida";
+        }
+    }
+
+    private String shortValue(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "-";
+        }
+        String clean = value.trim();
+        if (clean.length() <= 16) {
+            return clean;
+        }
+        return clean.substring(0, 8) + "..." + clean.substring(clean.length() - 6);
     }
 
     private void shareBackupZip() {

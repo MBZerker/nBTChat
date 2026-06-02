@@ -14,6 +14,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelUuid;
 import android.os.Parcelable;
+import android.util.Log;
 
 import org.json.JSONObject;
 
@@ -24,8 +25,14 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -33,9 +40,13 @@ import java.util.UUID;
 
 public final class BtChatManager {
     private static final String SERVICE_NAME = "nBTChat";
+    private static final String LOG_TAG = "nBTChatBt";
     public static final UUID SERVICE_UUID = UUID.fromString("66a14f52-9c02-4c04-903d-0cdd8755a5f7");
     private static final int MAX_FRAME_BYTES = 1024 * 1024;
     private static final long SERVICE_CHECK_TIMEOUT_MS = 9000;
+    private static final long BOND_TIMEOUT_MS = 45_000L;
+    private static final long CONNECT_BACKOFF_MS = 6_000L;
+    private static final int MAX_DIAGNOSTIC_EVENTS = 120;
 
     public interface Listener {
         void onBluetoothState(String state);
@@ -104,6 +115,11 @@ public final class BtChatManager {
     private final Set<String> pendingServiceChecks = new HashSet<>();
     private final Map<String, BluetoothDevice> serviceCheckDevices = new HashMap<>();
     private final Map<String, String> lastConnectionErrors = new HashMap<>();
+    private final Map<String, DeviceCandidate> pendingBondCandidates = new HashMap<>();
+    private final Map<String, Runnable> pendingBondTimeouts = new HashMap<>();
+    private final Set<String> activeConnectAddresses = new HashSet<>();
+    private final Map<String, Long> lastConnectStartedAt = new HashMap<>();
+    private final ArrayDeque<String> diagnosticEvents = new ArrayDeque<>();
 
     private final BroadcastReceiver discoveryReceiver = new BroadcastReceiver() {
         @Override
@@ -124,6 +140,11 @@ public final class BtChatManager {
                 BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 if (device != null) {
                     handleServiceUuids(device, intent);
+                }
+            } else if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
+                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                if (device != null) {
+                    handleBondStateChanged(device, intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR));
                 }
             }
         }
@@ -161,6 +182,7 @@ public final class BtChatManager {
             insecureAcceptThread = new AcceptThread(true);
             insecureAcceptThread.start();
         }
+        addDiagnostic("accept/listen started secure=true insecure=true");
         postState("Pronto para receber conexoes Bluetooth.");
     }
 
@@ -172,6 +194,7 @@ public final class BtChatManager {
         }
         registerReceiverIfNeeded();
         nearbyDiscoveryMode = false;
+        addDiagnostic("discovery paired service check started");
         postState("Procurando nBTChat em aparelhos pareados...");
         try {
             pendingServiceChecks.clear();
@@ -206,6 +229,7 @@ public final class BtChatManager {
         nearbyDiscoveryMode = true;
         pendingServiceChecks.clear();
         serviceCheckDevices.clear();
+        addDiagnostic("nearby discovery started");
         postState("Procurando aparelhos proximos...");
         try {
             Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
@@ -344,16 +368,19 @@ public final class BtChatManager {
             postError("Nao encontrei este aparelho no Bluetooth. Pareie no Android ou deixe o aparelho visivel.");
             return;
         }
+        registerReceiverIfNeeded();
+        DeviceCandidate freshCandidate = refreshCandidate(candidate);
         try {
-            if (candidate.device.getBondState() != BluetoothDevice.BOND_BONDED) {
-                candidate.device.createBond();
-                postState("Confirme o pareamento Bluetooth. Vou tentar conectar em seguida.");
-                mainHandler.postDelayed(() -> connect(candidate), 5500);
+            int bondState = freshCandidate.device.getBondState();
+            addDiagnostic("connectDirect address=" + freshCandidate.address + " bond=" + bondStateName(bondState));
+            if (bondState != BluetoothDevice.BOND_BONDED) {
+                startBondAndConnect(freshCandidate);
                 return;
             }
-        } catch (SecurityException ignored) {
+        } catch (SecurityException ex) {
+            rememberConnectionError(freshCandidate.address, "bond", ex);
         }
-        connect(candidate);
+        connect(freshCandidate);
     }
 
     @SuppressLint("MissingPermission")
@@ -415,19 +442,36 @@ public final class BtChatManager {
         }
         String address = candidate.address == null || candidate.address.isEmpty() ? safeAddress(candidate.device) : candidate.address;
         if (isConnectedTo(address)) {
+            addDiagnostic("connect skip already connected " + address);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Long last = lastConnectStartedAt.get(address);
+        if (activeConnectAddresses.contains(address)) {
+            addDiagnostic("connect skip active attempt " + address);
+            return;
+        }
+        if (last != null && now - last < CONNECT_BACKOFF_MS) {
+            addDiagnostic("connect skip backoff " + address + " remainingMs=" + (CONNECT_BACKOFF_MS - (now - last)));
             return;
         }
         if (connectThread != null) {
+            addDiagnostic("connect cancel previous outgoing");
             connectThread.cancel();
         }
         try {
             if (adapter != null && adapter.isDiscovering()) {
+                addDiagnostic("connect cancel discovery before socket");
                 adapter.cancelDiscovery();
             }
         } catch (SecurityException ignored) {
         }
         postState("Conectando com " + candidate.name + "...");
-        connectThread = new ConnectThread(candidate.device);
+        activeConnectAddresses.add(address);
+        lastConnectStartedAt.put(address, now);
+        BluetoothDevice freshDevice = freshDevice(candidate.device, address);
+        addDiagnostic("connect start " + address + " name=" + candidate.name);
+        connectThread = new ConnectThread(freshDevice, address);
         connectThread.start();
     }
 
@@ -437,6 +481,43 @@ public final class BtChatManager {
         }
         String error = lastConnectionErrors.get(address);
         return error == null ? "" : error;
+    }
+
+    public List<String> diagnosticEvents() {
+        synchronized (diagnosticEvents) {
+            return new ArrayList<>(diagnosticEvents);
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    public int bondState(String address) {
+        DeviceCandidate candidate = getPairedCandidate(address);
+        if (candidate == null || candidate.device == null) {
+            candidate = getDirectCandidate(address, "");
+        }
+        if (candidate == null || candidate.device == null) {
+            return BluetoothDevice.ERROR;
+        }
+        try {
+            return candidate.device.getBondState();
+        } catch (SecurityException ex) {
+            return BluetoothDevice.ERROR;
+        }
+    }
+
+    public String bondStateLabel(String address) {
+        return bondStateName(bondState(address));
+    }
+
+    public boolean hasPendingConnectionOrBond(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return false;
+        }
+        return activeConnectAddresses.contains(address) || pendingBondCandidates.containsKey(address);
+    }
+
+    public boolean hasPendingConnections() {
+        return !activeConnectAddresses.isEmpty() || !pendingBondCandidates.isEmpty();
     }
 
     public void sendMessage(String body) {
@@ -532,6 +613,9 @@ public final class BtChatManager {
             connectedThread = null;
         }
         lastConnectionErrors.remove(address);
+        activeConnectAddresses.remove(address);
+        cancelPendingBond(address);
+        addDiagnostic("reset connection state " + address);
         postState("Estado interno de conexao limpo.");
     }
 
@@ -544,8 +628,10 @@ public final class BtChatManager {
         try {
             java.lang.reflect.Method method = candidate.device.getClass().getMethod("removeBond");
             Object result = method.invoke(candidate.device);
+            addDiagnostic("unpair requested " + address + " result=" + result);
             return result instanceof Boolean && (Boolean) result;
         } catch (Exception ignored) {
+            addDiagnostic("unpair failed " + address + " " + ignored.getClass().getSimpleName());
             return false;
         }
     }
@@ -572,6 +658,12 @@ public final class BtChatManager {
             connectThread.cancel();
             connectThread = null;
         }
+        for (Runnable timeout : new ArrayList<>(pendingBondTimeouts.values())) {
+            mainHandler.removeCallbacks(timeout);
+        }
+        pendingBondTimeouts.clear();
+        pendingBondCandidates.clear();
+        activeConnectAddresses.clear();
         if (connectedThread != null) {
             connectedThread.cancel();
             connectedThread = null;
@@ -592,6 +684,7 @@ public final class BtChatManager {
         IntentFilter filter = new IntentFilter();
         filter.addAction(BluetoothDevice.ACTION_FOUND);
         filter.addAction(BluetoothDevice.ACTION_UUID);
+        filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
         filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             appContext.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
@@ -603,6 +696,7 @@ public final class BtChatManager {
 
     private void handleSocket(BluetoothSocket socket, boolean incoming) {
         if (incoming && connectThread != null) {
+            addDiagnostic("incoming socket cancels outgoing attempt");
             connectThread.cancel();
             connectThread = null;
         }
@@ -611,7 +705,107 @@ public final class BtChatManager {
             current.cancel();
         }
         connectedThread = new ConnectedThread(socket, incoming);
+        addDiagnostic("socket handed to connected thread incoming=" + incoming + " address=" + safeAddress(socket.getRemoteDevice()));
         connectedThread.start();
+    }
+
+    @SuppressLint("MissingPermission")
+    private DeviceCandidate refreshCandidate(DeviceCandidate candidate) {
+        if (candidate == null || candidate.device == null) {
+            return candidate;
+        }
+        String address = candidate.address == null || candidate.address.isEmpty() ? safeAddress(candidate.device) : candidate.address;
+        BluetoothDevice freshDevice = freshDevice(candidate.device, address);
+        return new DeviceCandidate(freshDevice, candidate.name, address, isBonded(freshDevice), candidate.appAvailable);
+    }
+
+    @SuppressLint("MissingPermission")
+    private BluetoothDevice freshDevice(BluetoothDevice fallback, String address) {
+        if (adapter != null && QrInvite.validBluetoothAddress(address)) {
+            try {
+                return adapter.getRemoteDevice(address);
+            } catch (Exception ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    @SuppressLint("MissingPermission")
+    private void startBondAndConnect(DeviceCandidate candidate) {
+        if (candidate == null || candidate.device == null || candidate.address == null || candidate.address.isEmpty()) {
+            postError("Nao encontrei este aparelho para parear.");
+            return;
+        }
+        if (pendingBondCandidates.containsKey(candidate.address)) {
+            addDiagnostic("bond skip pending " + candidate.address);
+            postState("Aguardando confirmacao de pareamento com " + candidate.name + "...");
+            return;
+        }
+        try {
+            pendingBondCandidates.put(candidate.address, candidate);
+            Runnable timeout = () -> {
+                DeviceCandidate pending = pendingBondCandidates.remove(candidate.address);
+                pendingBondTimeouts.remove(candidate.address);
+                if (pending != null) {
+                    lastConnectionErrors.put(candidate.address, "Pareamento nao foi confirmado pelo Android dentro do tempo.");
+                    addDiagnostic("bond timeout " + candidate.address);
+                    postError("Nao foi possivel parear com " + candidate.name + ". Confirme o codigo de pareamento nos dois aparelhos e tente novamente.");
+                }
+            };
+            pendingBondTimeouts.put(candidate.address, timeout);
+            mainHandler.postDelayed(timeout, BOND_TIMEOUT_MS);
+            postState("Aguardando confirmacao de pareamento com " + candidate.name + "...");
+            int currentState = candidate.device.getBondState();
+            if (currentState == BluetoothDevice.BOND_BONDING) {
+                addDiagnostic("bond already bonding " + candidate.address);
+                return;
+            }
+            addDiagnostic("bond createBond requested " + candidate.address);
+            boolean started = candidate.device.createBond();
+            if (!started) {
+                cancelPendingBond(candidate.address);
+                lastConnectionErrors.put(candidate.address, "Android recusou iniciar o pareamento.");
+                addDiagnostic("bond createBond returned false " + candidate.address);
+                postError("O Android nao iniciou o pareamento com " + candidate.name + ". Deixe o aparelho visivel e tente pela tela de scanner.");
+            }
+        } catch (SecurityException ex) {
+            cancelPendingBond(candidate.address);
+            rememberConnectionError(candidate.address, "bond", ex);
+            postError("Permissao Bluetooth negada para parear.");
+        }
+    }
+
+    private void handleBondStateChanged(BluetoothDevice device, int state) {
+        String address = safeAddress(device);
+        if (address.isEmpty()) {
+            return;
+        }
+        addDiagnostic("bond state " + address + " " + bondStateName(state));
+        DeviceCandidate pending = pendingBondCandidates.get(address);
+        if (pending == null) {
+            return;
+        }
+        if (state == BluetoothDevice.BOND_BONDED) {
+            cancelPendingBond(address);
+            DeviceCandidate fresh = refreshCandidate(pending);
+            postState("Pareamento concluido. Conectando...");
+            connect(fresh);
+        } else if (state == BluetoothDevice.BOND_NONE) {
+            cancelPendingBond(address);
+            lastConnectionErrors.put(address, "Pareamento cancelado ou recusado pelo Android.");
+            postError("Pareamento cancelado. Confirme o codigo nos dois aparelhos e tente novamente.");
+        }
+    }
+
+    private void cancelPendingBond(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        pendingBondCandidates.remove(address);
+        Runnable timeout = pendingBondTimeouts.remove(address);
+        if (timeout != null) {
+            mainHandler.removeCallbacks(timeout);
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -690,6 +884,55 @@ public final class BtChatManager {
         mainHandler.post(() -> listener.onDeviceFound(new DeviceCandidate(device, name, address, paired, appAvailable)));
     }
 
+    private void rememberConnectionError(String address, String stage, Exception ex) {
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        String message = (stage == null || stage.isEmpty() ? "" : stage + ": ")
+                + ex.getClass().getSimpleName()
+                + (ex.getMessage() == null || ex.getMessage().isEmpty() ? "" : ": " + ex.getMessage());
+        lastConnectionErrors.put(address, message);
+        addDiagnostic("error " + address + " " + message);
+    }
+
+    private void addDiagnostic(String event) {
+        if (event == null || event.trim().isEmpty()) {
+            return;
+        }
+        String timestamp = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+        String line = timestamp + " " + event;
+        synchronized (diagnosticEvents) {
+            diagnosticEvents.addLast(line);
+            while (diagnosticEvents.size() > MAX_DIAGNOSTIC_EVENTS) {
+                diagnosticEvents.removeFirst();
+            }
+        }
+        Log.d(LOG_TAG, event);
+    }
+
+    private String bondStateName(int state) {
+        if (state == BluetoothDevice.BOND_BONDED) {
+            return "BONDED";
+        }
+        if (state == BluetoothDevice.BOND_BONDING) {
+            return "BONDING";
+        }
+        if (state == BluetoothDevice.BOND_NONE) {
+            return "NONE";
+        }
+        return "UNKNOWN(" + state + ")";
+    }
+
+    private String socketModeName(int mode) {
+        if (mode == 0) {
+            return "secure";
+        }
+        if (mode == 1) {
+            return "insecure";
+        }
+        return "reflection-channel-1";
+    }
+
     @SuppressLint("MissingPermission")
     private String safeName(BluetoothDevice device) {
         try {
@@ -713,10 +956,12 @@ public final class BtChatManager {
     }
 
     private void postState(String state) {
+        addDiagnostic("state " + state);
         mainHandler.post(() -> listener.onBluetoothState(state));
     }
 
     private void postError(String message) {
+        addDiagnostic("ui-error " + message);
         mainHandler.post(() -> listener.onError(message));
     }
 
@@ -733,6 +978,7 @@ public final class BtChatManager {
         @Override
         public void run() {
             try {
+                addDiagnostic("accept listen opening mode=" + (insecure ? "insecure" : "secure"));
                 serverSocket = insecure
                         ? adapter.listenUsingInsecureRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID)
                         : adapter.listenUsingRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID);
@@ -741,6 +987,7 @@ public final class BtChatManager {
                     if (socket != null) {
                         String remoteName = safeName(socket.getRemoteDevice());
                         String remoteAddress = safeAddress(socket.getRemoteDevice());
+                        addDiagnostic("accept incoming mode=" + (insecure ? "insecure" : "secure") + " address=" + remoteAddress);
                         mainHandler.post(() -> listener.onIncomingConnection(remoteName, remoteAddress));
                         handleSocket(socket, true);
                     }
@@ -748,6 +995,7 @@ public final class BtChatManager {
             } catch (IOException ex) {
                 if (running) {
                     String mode = insecure ? "compatibilidade" : "segura";
+                    addDiagnostic("accept failed mode=" + mode + " " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
                     postError("Falha ao escutar conexoes Bluetooth (" + mode + "): " + ex.getMessage());
                 }
             } catch (SecurityException ex) {
@@ -763,11 +1011,13 @@ public final class BtChatManager {
 
     private final class ConnectThread extends Thread {
         private final BluetoothDevice device;
+        private final String address;
         private BluetoothSocket socket;
         private boolean running = true;
 
-        ConnectThread(BluetoothDevice device) {
+        ConnectThread(BluetoothDevice device, String address) {
             this.device = device;
+            this.address = address == null || address.isEmpty() ? safeAddress(device) : address;
         }
 
         @SuppressLint("MissingPermission")
@@ -783,15 +1033,19 @@ public final class BtChatManager {
             } catch (IOException ex) {
                 closeQuietly(socket);
                 if (running) {
-                    String address = safeAddress(device);
-                    lastConnectionErrors.put(address, ex.getClass().getSimpleName() + ": " + ex.getMessage());
-                    postError("Nao foi possivel conectar. Confirme se o outro aparelho esta visivel, pareado e com o nBTChat aberto.");
+                    rememberConnectionError(address, "socket", ex);
+                    postError("Nao foi possivel conectar com " + safeName(device) + ". Abra o nBTChat nos dois aparelhos e tente novamente.");
                 }
             } catch (SecurityException ex) {
                 if (running) {
-                    String address = safeAddress(device);
                     lastConnectionErrors.put(address, "Permissao Bluetooth negada.");
+                    addDiagnostic("connect permission denied " + address);
                     postError("Permissao Bluetooth negada para conectar.");
+                }
+            } finally {
+                activeConnectAddresses.remove(address);
+                if (connectThread == this) {
+                    connectThread = null;
                 }
             }
         }
@@ -802,12 +1056,15 @@ public final class BtChatManager {
             for (int mode = 0; mode < 3 && running; mode++) {
                 BluetoothSocket attempt = null;
                 try {
+                    addDiagnostic("socket attempt " + socketModeName(mode) + " " + address);
                     attempt = createSocketForMode(mode);
                     socket = attempt;
                     attempt.connect();
+                    addDiagnostic("socket success " + socketModeName(mode) + " " + address);
                     return attempt;
                 } catch (IOException ex) {
                     lastError = ex;
+                    rememberConnectionError(address, socketModeName(mode), ex);
                     closeQuietly(attempt);
                     socket = null;
                 }
@@ -867,6 +1124,7 @@ public final class BtChatManager {
         public void run() {
             try {
                 remoteAddress = safeAddress(socket.getRemoteDevice());
+                addDiagnostic("handshake start incoming=" + incoming + " address=" + remoteAddress);
                 input = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
                 output = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
 
@@ -924,6 +1182,7 @@ public final class BtChatManager {
                 }
                 profileStore.saveContact(remoteAddress, remoteProfile);
                 ProfileStore.IdentityStatus identityStatus = profileStore.verifyOrStoreIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey, safeName(socket.getRemoteDevice()));
+                addDiagnostic("identity status " + remoteAddress + " " + identityStatus.name());
                 if (identityStatus == ProfileStore.IdentityStatus.CHANGED_KEY
                         || identityStatus == ProfileStore.IdentityStatus.CHANGED_DEVICE
                         || identityStatus == ProfileStore.IdentityStatus.INVALID) {
@@ -935,6 +1194,7 @@ public final class BtChatManager {
                 mainHandler.post(() -> listener.onRemoteProfile(remoteAddress, remoteProfile));
                 mainHandler.post(() -> listener.onRemoteIdentity(remoteAddress, remoteDeviceId, remoteIdentityPublicKey));
                 mainHandler.post(() -> listener.onConnected(remoteAddress, remoteProfile, cryptoSession.getFingerprint()));
+                addDiagnostic("handshake connected " + remoteAddress);
                 flushRelayQueue();
 
                 while (running) {
@@ -962,11 +1222,13 @@ public final class BtChatManager {
                 }
             } catch (EOFException ex) {
                 if (running) {
+                    addDiagnostic("connection eof " + remoteAddress);
                     postState("O outro aparelho encerrou a conversa.");
                 }
             } catch (Exception ex) {
                 if (running) {
                     String name = safeName(socket.getRemoteDevice());
+                    rememberConnectionError(remoteAddress, "connected", ex);
                     postError("Nao foi possivel manter a conexao com " + name + ". Abra o nBTChat nos dois aparelhos e tente novamente.");
                 }
             } finally {
@@ -975,6 +1237,7 @@ public final class BtChatManager {
                     connectedThread = null;
                 }
                 if (remoteAddress != null && !remoteAddress.isEmpty()) {
+                    addDiagnostic("disconnected " + remoteAddress);
                     mainHandler.post(() -> listener.onDisconnected(remoteAddress));
                 }
             }
