@@ -320,6 +320,10 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private String palitinhosChatDraft = "";
     private final ArrayList<String> palitinhosInvitees = new ArrayList<>();
     private final Map<String, Long> palitinhosInviteWakeAt = new HashMap<>();
+    private final ArrayList<PalitinhosOutboxItem> palitinhosOutbox = new ArrayList<>();
+    private final Map<String, Long> palitinhosLastAckAt = new HashMap<>();
+    private final ArrayList<String> palitinhosRecentEvents = new ArrayList<>();
+    private Runnable palitinhosOutboxRunnable;
     private Runnable palitinhosInviteWakeRunnable;
     private int palitinhosInviteWakeIndex;
     private boolean palitinhosHostMode = true;
@@ -938,11 +942,18 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (blePresenceManager == null || requestWouldNeedBlePermission()) {
             return;
         }
-        if ("scanner".equals(currentScreen) || "chat".equals(currentScreen)) {
+        if ("scanner".equals(currentScreen) || "chat".equals(currentScreen) || isPalitinhosScreen(currentScreen)) {
             blePresenceManager.startAggressive();
         } else if (profileStore != null && profileStore.hasLocalProfile()) {
             blePresenceManager.startEconomy();
         }
+    }
+
+    private boolean isPalitinhosScreen(String screen) {
+        return "palitinhos_invite".equals(screen)
+                || "palitinhos_lobby".equals(screen)
+                || "palitinhos_start".equals(screen)
+                || "palitinhos".equals(screen);
     }
 
     private void stopBlePresence() {
@@ -3166,6 +3177,9 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         palitinhosTurn = -1;
         palitinhosMatchOver = false;
         palitinhosWinnerIndex = -1;
+        palitinhosOutbox.clear();
+        palitinhosLastAckAt.clear();
+        palitinhosRecentEvents.clear();
         normalizePalitinhosPlayerSlots();
     }
 
@@ -3237,6 +3251,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         palitinhosInviteWakeAt.clear();
         palitinhosInviteWakeFailedAt.clear();
         homePresenceConnecting.clear();
+        clearPalitinhosOutboxForCurrentGame();
         normalizePalitinhosPlayerSlots();
         Toast.makeText(this, "Nova sala criada.", Toast.LENGTH_SHORT).show();
         showPalitinhosLobbyScreen();
@@ -3296,8 +3311,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void showPalitinhosLobbyScreen() {
-        stopPalitinhosInviteWakeLoop();
         currentScreen = "palitinhos_lobby";
+        startBlePresenceForCurrentScreen();
         normalizePalitinhosPlayerSlots();
         probePalitinhosConnections();
         ScrollView scrollView = new ScrollView(this);
@@ -3393,6 +3408,8 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
         setContentView(scrollView);
         requestInsets(root);
+        startPalitinhosInviteWakeLoop();
+        schedulePalitinhosOutbox(250L);
     }
 
     private int palitinhosGuestSlotLimit() {
@@ -3494,12 +3511,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         row.addView(label, labelParams);
         String presence = contactPresenceStatus(address);
         boolean recentFailure = isRecentPalitinhosInviteWakeFailure(address);
+        int pendingEvents = pendingPalitinhosOutboxCount(address);
         String statusText = homePresenceConnecting.contains(address)
                 ? "Tentando"
-                : (recentFailure ? "Ainda nao conectado" : publicPresenceLabel(presence));
-        String prefix = joined ? "Na sala\n" : (selected ? "Selecionado\n" : "");
+                : (pendingEvents > 0 ? "Evento pendente"
+                : (joined ? (palitinhosInviteeReady(address) ? "Pronto" : "Na sala")
+                : (recentFailure ? "Ainda nao conectado" : publicPresenceLabel(presence))));
+        String prefix = selected && !joined ? "Selecionado\n" : "";
         TextView status = text(prefix + statusText, 12,
-                homePresenceConnecting.contains(address) ? "#FACC15" : (recentFailure ? "#F97316" : presenceColor(presence)), Typeface.BOLD);
+                homePresenceConnecting.contains(address) || pendingEvents > 0 ? "#FACC15" : (recentFailure ? "#F97316" : presenceColor(presence)), Typeface.BOLD);
         status.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         row.addView(status);
         row.setOnClickListener(v -> {
@@ -3534,6 +3554,11 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     private boolean palitinhosInviteeJoined(String address) {
         int index = palitinhosInvitees.indexOf(address);
         return index >= 0 && index + 1 < palitinhosJoined.length && palitinhosJoined[index + 1];
+    }
+
+    private boolean palitinhosInviteeReady(String address) {
+        int index = palitinhosInvitees.indexOf(address);
+        return index >= 0 && index + 1 < palitinhosReady.length && palitinhosReady[index + 1];
     }
 
     private void removePalitinhosInvitee(String address) {
@@ -3576,7 +3601,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (address == null || address.trim().isEmpty() || btChatManager == null || profileStore.isBlocked(address)) {
             return;
         }
-        if (btChatManager.canSendTo(address) || btChatManager.isConnectedTo(address)) {
+        if (btChatManager.isConnectedTo(address)) {
             homePresenceConnecting.remove(address);
             palitinhosInviteWakeFailedAt.remove(address);
             return;
@@ -3593,7 +3618,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         Log.d(PALITINHOS_LOG_TAG, "wake connect " + address);
         connectForAddress(address);
         uiHandler.postDelayed(() -> {
-            boolean stillDisconnected = !btChatManager.canSendTo(address) && !btChatManager.isConnectedTo(address);
+            boolean stillDisconnected = !btChatManager.isConnectedTo(address);
             homePresenceConnecting.remove(address);
             if (stillDisconnected) {
                 palitinhosInviteWakeFailedAt.put(address, System.currentTimeMillis());
@@ -3611,7 +3636,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void startPalitinhosInviteWakeLoop() {
-        if (!"palitinhos_invite".equals(currentScreen)) {
+        if (!"palitinhos_invite".equals(currentScreen) && !"palitinhos_lobby".equals(currentScreen)) {
             return;
         }
         if (palitinhosInviteWakeRunnable == null) {
@@ -3629,7 +3654,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
     }
 
     private void runPalitinhosInviteWakeStep() {
-        if (!"palitinhos_invite".equals(currentScreen) || btChatManager == null) {
+        if ((!"palitinhos_invite".equals(currentScreen) && !"palitinhos_lobby".equals(currentScreen)) || btChatManager == null) {
             stopPalitinhosInviteWakeLoop();
             return;
         }
@@ -3645,7 +3670,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                 boolean recent = last != null && now - last < 7000L;
                 if (!recent && !homePresenceConnecting.contains(address)
                         && !profileStore.isBlocked(address)
-                        && !btChatManager.canSendTo(address)
                         && !btChatManager.isConnectedTo(address)) {
                     palitinhosInviteWakeAt.put(address, now);
                     connectForPalitinhosStatus(address);
@@ -3654,7 +3678,6 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
                     Log.d(PALITINHOS_LOG_TAG, "skip wake address=" + address
                             + " recent=" + recent
                             + " connecting=" + homePresenceConnecting.contains(address)
-                            + " canSend=" + btChatManager.canSendTo(address)
                             + " connected=" + btChatManager.isConnectedTo(address));
                 }
             }
@@ -3664,12 +3687,12 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
 
     private ArrayList<String> palitinhosInviteWakeTargets() {
         ArrayList<String> targets = new ArrayList<>();
-        for (String address : palitinhosInvitees) {
-            if (address != null && !address.trim().isEmpty() && !targets.contains(address)) {
-                targets.add(address);
+        for (PalitinhosOutboxItem item : palitinhosOutbox) {
+            if (!item.acked && item.targetAddress != null && !item.targetAddress.trim().isEmpty() && !targets.contains(item.targetAddress)) {
+                targets.add(item.targetAddress);
             }
         }
-        for (String address : profileStore.loadContacts().keySet()) {
+        for (String address : palitinhosInvitees) {
             if (address != null && !address.trim().isEmpty() && !targets.contains(address)) {
                 targets.add(address);
             }
@@ -3701,7 +3724,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             String body = palitinhosInviteBody("invite", i + 1);
             String id = messageStore.createId();
             messageStore.addMessage(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, true, sentAt, MessageStore.STATUS_PENDING, false);
-            sendOrQueueOutgoing(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt);
+            enqueuePalitinhosOutbox(address, id, body, true);
             Log.d(PALITINHOS_LOG_TAG, "invite sent/enqueued address=" + address + " slot=" + (i + 1) + " game=" + palitinhosGameId);
         }
         Toast.makeText(this, invited + " convite(s) enviados.", Toast.LENGTH_SHORT).show();
@@ -3784,6 +3807,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         JSONObject json = new JSONObject();
         json.put("type", type);
         json.put("gameId", palitinhosGameId == null ? "" : palitinhosGameId);
+        json.put("eventId", messageStore.createId());
         json.put("playerIndex", localPalitinhosPlayerIndex);
         json.put("round", palitinhosRoundNumber);
         json.put("targetScore", palitinhosTargetScore);
@@ -3794,16 +3818,216 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         if (address == null || address.trim().isEmpty()) {
             return;
         }
+        JSONObject json = palitinhosJson(body);
+        String type = json.optString("type", "");
+        String id = json.optString("eventId", "");
+        if (id.trim().isEmpty()) {
+            id = messageStore.createId();
+            try {
+                json.put("eventId", id);
+                body = json.toString();
+            } catch (JSONException ignored) {
+            }
+        }
+        boolean critical = isCriticalPalitinhosEvent(type);
+        if (critical) {
+            enqueuePalitinhosOutbox(address, id, body, true);
+            return;
+        }
+        sendPalitinhosDirectOrQueue(address, id, body, false);
+    }
+
+    private boolean isCriticalPalitinhosEvent(String type) {
+        return "invite".equals(type)
+                || "join_accept".equals(type)
+                || "join_reject".equals(type)
+                || "lobby_state".equals(type)
+                || "start_countdown".equals(type)
+                || "round_start".equals(type)
+                || "phase".equals(type)
+                || "reveal_start".equals(type)
+                || "match_over".equals(type)
+                || "guess_reject".equals(type)
+                || "expire".equals(type);
+    }
+
+    private void enqueuePalitinhosOutbox(String address, String messageId, String body, boolean requiresAck) {
+        if (address == null || address.trim().isEmpty() || body == null || body.trim().isEmpty()) {
+            return;
+        }
+        JSONObject json = palitinhosJson(body);
+        String type = json.optString("type", "");
+        String gameId = json.optString("gameId", palitinhosGameId == null ? "" : palitinhosGameId);
+        String eventId = json.optString("eventId", messageId == null ? "" : messageId);
+        if (eventId.trim().isEmpty()) {
+            eventId = messageStore.createId();
+            try {
+                json.put("eventId", eventId);
+                body = json.toString();
+            } catch (JSONException ignored) {
+            }
+        }
+        for (PalitinhosOutboxItem item : palitinhosOutbox) {
+            if (!item.acked && address.equals(item.targetAddress) && eventId.equals(item.messageId)) {
+                return;
+            }
+        }
+        PalitinhosOutboxItem item = new PalitinhosOutboxItem(gameId, type, address, eventId, body, System.currentTimeMillis(), requiresAck);
+        palitinhosOutbox.add(item);
+        logPalitinhosEvent("outbox add type=" + type + " target=" + address + " game=" + gameId + " id=" + shortValue(eventId));
+        schedulePalitinhosOutbox(120L);
+    }
+
+    private void schedulePalitinhosOutbox(long delayMs) {
+        if (palitinhosOutboxRunnable == null) {
+            palitinhosOutboxRunnable = this::processPalitinhosOutbox;
+        }
+        uiHandler.removeCallbacks(palitinhosOutboxRunnable);
+        uiHandler.postDelayed(palitinhosOutboxRunnable, Math.max(80L, delayMs));
+    }
+
+    private void processPalitinhosOutbox() {
+        long now = System.currentTimeMillis();
+        palitinhosOutbox.removeIf(item -> item.acked || now - item.createdAt > 10 * 60_000L);
+        PalitinhosOutboxItem next = nextPalitinhosOutboxItem(now);
+        if (next == null) {
+            return;
+        }
+        if (btChatManager == null || profileStore.isBlocked(next.targetAddress)) {
+            next.lastAttemptAt = now;
+            schedulePalitinhosOutbox(2500L);
+            return;
+        }
+        if (!btChatManager.isConnectedTo(next.targetAddress)) {
+            if (!homePresenceConnecting.contains(next.targetAddress)) {
+                logPalitinhosEvent("outbox connect target=" + next.targetAddress + " type=" + next.type);
+                connectForPalitinhosStatus(next.targetAddress);
+            }
+            schedulePalitinhosOutbox(1800L);
+            return;
+        }
+        next.attemptCount++;
+        next.lastAttemptAt = now;
+        logPalitinhosEvent("outbox send type=" + next.type + " target=" + next.targetAddress + " attempt=" + next.attemptCount);
+        btChatManager.sendChatMessage(next.targetAddress, next.messageId, MessageStore.KIND_PALITINHOS_INVITE,
+                next.body, "", 0L, now, "", "");
+        if (!next.requiresAck) {
+            next.acked = true;
+            palitinhosOutbox.remove(next);
+        }
+        schedulePalitinhosOutbox(next.requiresAck ? 2200L : 300L);
+    }
+
+    private PalitinhosOutboxItem nextPalitinhosOutboxItem(long now) {
+        PalitinhosOutboxItem best = null;
+        for (PalitinhosOutboxItem item : palitinhosOutbox) {
+            if (item.acked) {
+                continue;
+            }
+            if (item.attemptCount > 0 && now - item.lastAttemptAt < palitinhosRetryDelay(item.attemptCount)) {
+                continue;
+            }
+            if (best == null || item.createdAt < best.createdAt) {
+                best = item;
+            }
+        }
+        return best;
+    }
+
+    private long palitinhosRetryDelay(int attempts) {
+        if (attempts <= 0) {
+            return 0L;
+        }
+        return Math.min(15_000L, 1800L * Math.max(1, attempts));
+    }
+
+    private void sendPalitinhosDirectOrQueue(String address, String id, String body, boolean allowAnyRoute) {
         long sentAt = System.currentTimeMillis();
-        String id = messageStore.createId();
-        if (btChatManager != null && btChatManager.canSendTo(address)) {
+        boolean connectedDirect = btChatManager != null && btChatManager.isConnectedTo(address);
+        boolean canSend = btChatManager != null && btChatManager.canSendTo(address);
+        if (connectedDirect || (allowAnyRoute && canSend)) {
             btChatManager.sendChatMessage(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt, "", "");
+            logPalitinhosEvent("send direct target=" + address + " id=" + shortValue(id));
             return;
         }
         PendingOutgoing outgoing = new PendingOutgoing(address, id, MessageStore.KIND_PALITINHOS_INVITE, body, "", 0L, sentAt, "", "");
         pendingOutgoing.add(outgoing);
-        connectForAddress(address);
+        connectForPalitinhosStatus(address);
         scheduleWakeForPendingOutgoing(outgoing);
+        logPalitinhosEvent("send queued target=" + address + " id=" + shortValue(id) + " canSend=" + canSend);
+    }
+
+    private void sendPalitinhosAck(String address, JSONObject received) {
+        if (address == null || address.trim().isEmpty() || received == null) {
+            return;
+        }
+        try {
+            JSONObject ack = new JSONObject();
+            ack.put("type", "ack");
+            ack.put("gadgetKey", "palitinhos");
+            ack.put("gameId", received.optString("gameId", ""));
+            ack.put("ackId", received.optString("eventId", ""));
+            ack.put("eventType", received.optString("type", ""));
+            ack.put("playerIndex", localPalitinhosPlayerIndex);
+            ack.put("eventId", messageStore.createId());
+            sendPalitinhosDirectOrQueue(address, ack.optString("eventId"), ack.toString(), true);
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private void handlePalitinhosAck(String address, JSONObject json) {
+        String ackId = json.optString("ackId", "");
+        String gameId = json.optString("gameId", "");
+        String eventType = json.optString("eventType", "");
+        if (ackId.trim().isEmpty()) {
+            return;
+        }
+        ArrayList<PalitinhosOutboxItem> acked = new ArrayList<>();
+        for (PalitinhosOutboxItem item : palitinhosOutbox) {
+            if (ackId.equals(item.messageId) && address.equals(item.targetAddress)) {
+                item.acked = true;
+                acked.add(item);
+            }
+        }
+        palitinhosOutbox.removeAll(acked);
+        palitinhosLastAckAt.put(address, System.currentTimeMillis());
+        logPalitinhosEvent("ack type=" + eventType + " from=" + address + " game=" + gameId + " id=" + shortValue(ackId));
+        if ("palitinhos_invite".equals(currentScreen)) {
+            showPalitinhosInviteScreen();
+        } else if ("palitinhos_lobby".equals(currentScreen)) {
+            showPalitinhosLobbyScreen();
+        }
+        schedulePalitinhosOutbox(200L);
+    }
+
+    private int pendingPalitinhosOutboxCount(String address) {
+        int count = 0;
+        for (PalitinhosOutboxItem item : palitinhosOutbox) {
+            if (!item.acked && (address == null || address.equals(item.targetAddress))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void clearPalitinhosOutboxForCurrentGame() {
+        if (palitinhosGameId == null || palitinhosGameId.trim().isEmpty()) {
+            palitinhosOutbox.clear();
+            return;
+        }
+        palitinhosOutbox.removeIf(item -> palitinhosGameId.equals(item.gameId));
+    }
+
+    private void logPalitinhosEvent(String event) {
+        if (event == null || event.trim().isEmpty()) {
+            return;
+        }
+        String line = System.currentTimeMillis() + " " + event;
+        palitinhosRecentEvents.add(line);
+        while (palitinhosRecentEvents.size() > 80) {
+            palitinhosRecentEvents.remove(0);
+        }
+        Log.d(PALITINHOS_LOG_TAG, event);
     }
 
     private boolean allPalitinhosReady() {
@@ -6428,6 +6652,27 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             Toast.makeText(this, gameId.trim().isEmpty() ? "Convite invalido." : "Convite expirado.", Toast.LENGTH_LONG).show();
             return;
         }
+        if (expiredPalitinhosGames.contains(gameId)) {
+            Toast.makeText(this, "Convite expirado.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (palitinhosGameId != null && !palitinhosGameId.trim().isEmpty()
+                && !gameId.equals(palitinhosGameId)
+                && isPalitinhosScreen(currentScreen)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Entrar em outra sala?")
+                    .setMessage("Voce ja esta em outra sala. Sair dela e entrar neste convite?")
+                    .setPositiveButton("Entrar", (dialog, which) -> {
+                        clearPalitinhosOutboxForCurrentGame();
+                        palitinhosGameId = "";
+                        pendingPalitinhosJoinBody = "";
+                        pendingPalitinhosJoinGameId = "";
+                        acceptPalitinhosInvite(body);
+                    })
+                    .setNegativeButton("Cancelar", null)
+                    .show();
+            return;
+        }
         temporarilyUnavailablePalitinhosGames.remove(gameId);
         palitinhosReturnScreen = "chat";
         palitinhosReturnAddress = currentRemoteAddress == null ? "" : currentRemoteAddress;
@@ -7183,6 +7428,15 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             return false;
         }
         String gameId = json.optString("gameId", "");
+        if ("ack".equals(type)) {
+            handlePalitinhosAck(address, json);
+            return true;
+        }
+        if (isCriticalPalitinhosEvent(type) && palitinhosEventBelongsHere(type, gameId)) {
+            sendPalitinhosAck(address, json);
+        } else if (isCriticalPalitinhosEvent(type)) {
+            logPalitinhosEvent("ignore foreign event type=" + type + " game=" + gameId + " current=" + palitinhosGameId + " pending=" + pendingPalitinhosJoinGameId);
+        }
         if ("expire".equals(type)) {
             if (!gameId.isEmpty()) {
                 markPalitinhosGameExpired(gameId);
@@ -7487,6 +7741,25 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         return "Nao foi possivel entrar agora. Tente novamente.";
     }
 
+    private boolean palitinhosEventBelongsHere(String type, String gameId) {
+        if (gameId == null || gameId.trim().isEmpty()) {
+            return false;
+        }
+        if ("join_accept".equals(type) || "join_reject".equals(type)) {
+            return gameId.equals(pendingPalitinhosJoinGameId) || gameId.equals(palitinhosGameId);
+        }
+        if (palitinhosHostMode) {
+            return gameId.equals(palitinhosGameId)
+                    || "join_request".equals(type)
+                    || "ready".equals(type)
+                    || "join".equals(type)
+                    || "hand".equals(type)
+                    || "guess".equals(type)
+                    || "leave".equals(type);
+        }
+        return gameId.equals(palitinhosGameId);
+    }
+
     private void updateChatHeaderStatus() {
         String presence = contactPresenceStatus(currentRemoteAddress);
         LoadingRingView ring = statusRingView(chatAvatarFrame);
@@ -7766,6 +8039,7 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             showPalitinhosLobbyScreen();
         }
         flushPendingOutgoing(address);
+        schedulePalitinhosOutbox(100L);
         resendUndeliveredMessages(address);
     }
 
@@ -8116,6 +8390,19 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         }
         root.addView(bluetoothCard, topMargin(dp(12)));
 
+        LinearLayout palitinhosCard = vertical();
+        palitinhosCard.setPadding(dp(14), dp(14), dp(14), dp(14));
+        palitinhosCard.setBackground(rounded(surface(), dp(12), border()));
+        palitinhosCard.addView(text("Palitinhos", 17, primary(), Typeface.BOLD));
+        palitinhosCard.addView(text("Relatorio da sala, convites, fila de eventos e ACKs.", 13, secondary(), Typeface.NORMAL), topMargin(dp(6)));
+        Button copyPalitinhos = pillButton("Copiar diagnostico Palitinhos", "#16A34A", "#FFFFFF");
+        copyPalitinhos.setOnClickListener(v -> copyToClipboard(buildPalitinhosDiagnosticReport(), true));
+        palitinhosCard.addView(copyPalitinhos, topMargin(dp(12)));
+        TextView palitinhosSummary = text(buildPalitinhosDiagnosticSummary(), 12, secondary(), Typeface.NORMAL);
+        palitinhosSummary.setLineSpacing(dp(2), 1f);
+        palitinhosCard.addView(palitinhosSummary, topMargin(dp(10)));
+        root.addView(palitinhosCard, topMargin(dp(12)));
+
         setContentView(scrollView);
         requestInsets(root);
     }
@@ -8309,6 +8596,55 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
             for (String event : events) {
                 report.append(event).append("\n");
             }
+        }
+        return report.toString();
+    }
+
+    private String buildPalitinhosDiagnosticSummary() {
+        return "Papel: " + (palitinhosHostMode ? "host" : "cliente")
+                + "\nSala: " + safeName(palitinhosGameId, "-")
+                + "\nPendentes: " + pendingPalitinhosOutboxCount(null)
+                + "\nJogadores: " + palitinhosPlayers
+                + "\nJoined: " + booleanState(palitinhosJoined)
+                + "\nReady: " + booleanState(palitinhosReady);
+    }
+
+    private String buildPalitinhosDiagnosticReport() {
+        StringBuilder report = new StringBuilder();
+        report.append("nBTChat Palitinhos diagnostic\n");
+        report.append("role=").append(palitinhosHostMode ? "host" : "client").append("\n");
+        report.append("currentGameId=").append(palitinhosGameId).append("\n");
+        report.append("pendingJoinGameId=").append(pendingPalitinhosJoinGameId).append("\n");
+        report.append("roomStarted=").append(palitinhosRoomStarted).append("\n");
+        report.append("players=").append(palitinhosPlayers).append(" localIndex=").append(localPalitinhosPlayerIndex).append("\n");
+        report.append("phase=").append(palitinhosRoundPhase).append(" round=").append(palitinhosRoundNumber).append(" turn=").append(palitinhosTurn).append("\n");
+        report.append("joined=").append(booleanState(palitinhosJoined)).append("\n");
+        report.append("ready=").append(booleanState(palitinhosReady)).append("\n");
+        report.append("confirmed=").append(booleanState(palitinhosConfirmed)).append("\n");
+        report.append("invitees\n");
+        for (int i = 0; i < palitinhosInvitees.size(); i++) {
+            String address = palitinhosInvitees.get(i);
+            report.append("- slot=").append(i + 1)
+                    .append(" address=").append(address)
+                    .append(" connected=").append(btChatManager != null && btChatManager.isConnectedTo(address))
+                    .append(" pending=").append(pendingPalitinhosOutboxCount(address))
+                    .append(" lastAck=").append(palitinhosLastAckAt.get(address))
+                    .append(" lastError=").append(btChatManager == null ? "" : btChatManager.lastConnectionError(address))
+                    .append("\n");
+        }
+        report.append("outbox\n");
+        for (PalitinhosOutboxItem item : palitinhosOutbox) {
+            report.append("- type=").append(item.type)
+                    .append(" target=").append(item.targetAddress)
+                    .append(" game=").append(item.gameId)
+                    .append(" id=").append(shortValue(item.messageId))
+                    .append(" attempts=").append(item.attemptCount)
+                    .append(" acked=").append(item.acked)
+                    .append("\n");
+        }
+        report.append("events\n");
+        for (String event : palitinhosRecentEvents) {
+            report.append(event).append("\n");
         }
         return report.toString();
     }
@@ -10516,6 +10852,29 @@ public final class MainActivity extends Activity implements BtChatManager.Listen
         PendingDelete(String address, String id) {
             this.address = address;
             this.id = id;
+        }
+    }
+
+    private static final class PalitinhosOutboxItem {
+        final String gameId;
+        final String type;
+        final String targetAddress;
+        final String messageId;
+        final String body;
+        final long createdAt;
+        final boolean requiresAck;
+        int attemptCount;
+        long lastAttemptAt;
+        boolean acked;
+
+        PalitinhosOutboxItem(String gameId, String type, String targetAddress, String messageId, String body, long createdAt, boolean requiresAck) {
+            this.gameId = gameId == null ? "" : gameId;
+            this.type = type == null ? "" : type;
+            this.targetAddress = targetAddress == null ? "" : targetAddress;
+            this.messageId = messageId == null ? "" : messageId;
+            this.body = body == null ? "" : body;
+            this.createdAt = createdAt;
+            this.requiresAck = requiresAck;
         }
     }
 

@@ -1,11 +1,11 @@
 {
-  "versionCode": 77,
-  "versionName": "0.4.55",
+  "versionCode": 78,
+  "versionName": "0.4.56",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.55.apk",
-  "sha256": "efe1b4f81ae43d4d8fde44d65a8b74ecb11332f8a458fb95e31d7362e8a0dd9c",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.56.apk",
+  "sha256": "365a5e6570569759aac3a153b5baaf4d75b1f776af9f9a00257037d48485afd8",
   "signatureSha256": "0fc20e3b700b71858ac732a16aa4a322e9efe6d03bd92f0a6b3d703debd28316",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Melhora conexoes Bluetooth entre aparelhos pareados, aguarda pareamento por evento do Android, adiciona diagnostico copiavel e resets seguros por contato."
+  "changelog": "Melhora o Palitinhos com 3 a 6 aparelhos: fila de eventos criticos, ACK por evento, lobby acordando convidados por rodizio e diagnostico copiavel."
 }
