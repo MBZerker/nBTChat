@@ -1,11 +1,11 @@
 {
-  "versionCode": 78,
-  "versionName": "0.4.56",
+  "versionCode": 79,
+  "versionName": "0.4.57",
   "critical": false,
   "pageUrl": "https://mbzerker.github.io/nBTChat/",
-  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.56.apk",
-  "sha256": "365a5e6570569759aac3a153b5baaf4d75b1f776af9f9a00257037d48485afd8",
+  "apkUrl": "https://raw.githubusercontent.com/MBZerker/nBTChat/main/docs/nBTChat-0.4.57.apk",
+  "sha256": "ba6ff1c6f301e7b8b7d0b7eb5eaa10aa1aa3ad9dad5a53bcae80bd15bd60d005",
   "signatureSha256": "0fc20e3b700b71858ac732a16aa4a322e9efe6d03bd92f0a6b3d703debd28316",
   "origin": "GitHub Pages oficial do nBTChat",
-  "changelog": "Melhora o Palitinhos com 3 a 6 aparelhos: fila de eventos criticos, ACK por evento, lobby acordando convidados por rodizio e diagnostico copiavel."
+  "changelog": "Simplifica o Palitinhos para partida 1x1: loja, configuracao, lobby, convite e regras agora trabalham com apenas dois jogadores."
 }
