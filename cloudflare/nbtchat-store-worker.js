@@ -235,7 +235,9 @@ function isAllowedShortTarget(target, workerOrigin) {
       return false;
     }
     if (parsed.hostname === "mbzerker.github.io") {
-      return parsed.pathname.startsWith("/nBTChat/") || parsed.pathname.startsWith("/CompraLink/");
+      return parsed.pathname.startsWith("/nBTChat/")
+        || parsed.pathname.startsWith("/CompraLink/")
+        || parsed.pathname.startsWith("/CadernoReceitas/");
     }
   } catch (_) {
   }
