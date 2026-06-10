@@ -1,0 +1,8 @@
+name = "nbtchat-store"
+main = "nbtchat-store-worker.js"
+compatibility_date = "2026-06-09"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "STORE"
+id = "2047b4bcc34543d3aa30621e727571f7"

@@ -9,6 +9,8 @@ local.properties
 # Log/OS files
 *.log
 .DS_Store
+.wrangler/
+**/.wrangler/
 
 # Android Studio generated files and folders
 captures/
