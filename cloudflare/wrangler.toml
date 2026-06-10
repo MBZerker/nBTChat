@@ -6,3 +6,11 @@ workers_dev = true
 [[kv_namespaces]]
 binding = "STORE"
 id = "2047b4bcc34543d3aa30621e727571f7"
+
+[[durable_objects.bindings]]
+name = "COMPRALINK_LIST_ROOM"
+class_name = "CompraLinkListRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CompraLinkListRoom"]

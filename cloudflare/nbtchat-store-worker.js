@@ -225,6 +225,115 @@ function shareLandingPage(url, code) {
 </html>`);
 }
 
+export class CompraLinkListRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sessions = new Set();
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return json({ ok: false, error: "websocket_required" }, 426);
+    }
+    const listId = clean(url.pathname.replace(/^\/compralink-sync\//, ""));
+    const token = clean(url.searchParams.get("token"));
+    if (!isValidCompraLinkSyncId(listId) || !isValidCompraLinkSyncToken(token)) {
+      return json({ ok: false, error: "invalid_sync" }, 400);
+    }
+    const storedToken = await this.state.storage.get("token");
+    if (storedToken && storedToken !== token) {
+      return json({ ok: false, error: "forbidden" }, 403);
+    }
+    if (!storedToken) {
+      await this.state.storage.put("token", token);
+      await this.state.storage.put("createdAt", Date.now());
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.accept();
+    server.listId = listId;
+    server.token = token;
+    this.sessions.add(server);
+
+    const snapshot = await this.state.storage.get("snapshot");
+    if (snapshot && snapshot.list) {
+      server.send(JSON.stringify({ type: "snapshot", list: snapshot.list, clientId: "server", sentAt: Date.now() }));
+    }
+
+    server.addEventListener("message", async (event) => {
+      await this.handleMessage(server, event.data);
+    });
+    server.addEventListener("close", () => this.sessions.delete(server));
+    server.addEventListener("error", () => this.sessions.delete(server));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async handleMessage(sender, data) {
+    let message;
+    try {
+      message = JSON.parse(String(data || ""));
+    } catch (_) {
+      return;
+    }
+    if (message.token !== sender.token || message.listId !== sender.listId) return;
+    if (message.type !== "hello" && message.type !== "snapshot") return;
+    const list = message.list;
+    if (!isValidCompraLinkListSnapshot(list, sender.listId, sender.token)) return;
+
+    const previous = await this.state.storage.get("snapshot");
+    const incomingRevision = Number(list.revision || 0);
+    const incomingUpdatedAt = Number(list.updatedAt || 0);
+    if (previous && previous.list) {
+      const previousRevision = Number(previous.list.revision || 0);
+      const previousUpdatedAt = Number(previous.list.updatedAt || 0);
+      if (incomingRevision < previousRevision) {
+        sender.send(JSON.stringify({ type: "snapshot", list: previous.list, clientId: "server", sentAt: Date.now() }));
+        return;
+      }
+      if (incomingRevision === previousRevision && incomingUpdatedAt <= previousUpdatedAt && message.type !== "hello") {
+        return;
+      }
+    }
+
+    await this.state.storage.put("snapshot", { list, updatedAt: Date.now() });
+    if (list.locked || list.archived || list.deletedFromHistory) {
+      await this.state.storage.put("closedAt", Date.now());
+    }
+    const outgoing = JSON.stringify({
+      type: "snapshot",
+      clientId: clean(message.clientId),
+      list,
+      sentAt: Date.now(),
+    });
+    for (const session of this.sessions) {
+      if (session !== sender && session.readyState === WebSocket.OPEN) {
+        session.send(outgoing);
+      }
+    }
+  }
+}
+
+function isValidCompraLinkSyncId(value) {
+  return !!value && /^[A-Za-z0-9._~-]{6,120}$/.test(value);
+}
+
+function isValidCompraLinkSyncToken(value) {
+  return !!value && /^[A-Za-z0-9._~-]{24,160}$/.test(value);
+}
+
+function isValidCompraLinkListSnapshot(list, listId, token) {
+  return list
+    && typeof list === "object"
+    && list.id === listId
+    && list.syncToken === token
+    && Array.isArray(list.items)
+    && list.items.length < 2000;
+}
+
 function isAllowedShortTarget(target, workerOrigin) {
   try {
     const parsed = new URL(target);
@@ -461,6 +570,14 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      if (url.pathname.startsWith("/compralink-sync/")) {
+        const listId = clean(url.pathname.replace(/^\/compralink-sync\//, ""));
+        if (!isValidCompraLinkSyncId(listId)) {
+          return json({ ok: false, error: "invalid_sync" }, 400);
+        }
+        const id = env.COMPRALINK_LIST_ROOM.idFromName(listId);
+        return env.COMPRALINK_LIST_ROOM.get(id).fetch(request);
+      }
       if (request.method === "GET" && url.pathname === "/") {
         return json({ ok: true, products: await getProducts(env) });
       }
