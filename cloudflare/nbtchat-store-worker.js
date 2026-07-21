@@ -1,4 +1,4 @@
-﻿const PRODUCTS = {
+const PRODUCTS = {
   cartela_de_eventos: {
     id: "cartela_de_eventos",
     title: "Cartela de eventos",
@@ -234,10 +234,9 @@ export class CompraLinkListRoom {
 
   async fetch(request) {
     const url = new URL(request.url);
-    if (request.headers.get("Upgrade") !== "websocket") {
-      return json({ ok: false, error: "websocket_required" }, 426);
-    }
-    const listId = clean(url.pathname.replace(/^\/compralink-sync\//, ""));
+    const parts = url.pathname.replace(/^\/compralink-sync\//, "").split("/");
+    const listId = clean(parts[0] || "");
+    const action = clean(parts[1] || "");
     const token = clean(url.searchParams.get("token"));
     if (!isValidCompraLinkSyncId(listId) || !isValidCompraLinkSyncToken(token)) {
       return json({ ok: false, error: "invalid_sync" }, 400);
@@ -249,6 +248,15 @@ export class CompraLinkListRoom {
     if (!storedToken) {
       await this.state.storage.put("token", token);
       await this.state.storage.put("createdAt", Date.now());
+    }
+    if (request.method === "POST" && action === "photo") {
+      return this.savePhoto(request, url, listId, token);
+    }
+    if (request.method === "GET" && action === "photo") {
+      return this.readPhoto(parts[2] || "");
+    }
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return json({ ok: false, error: "websocket_required" }, 426);
     }
 
     const pair = new WebSocketPair();
@@ -280,6 +288,22 @@ export class CompraLinkListRoom {
       return;
     }
     if (message.token !== sender.token || message.listId !== sender.listId) return;
+    if (message.type === "fiscalList") {
+      const imported = message.list;
+      if (!isValidCompraLinkImportedList(imported)) return;
+      const outgoingFiscal = JSON.stringify({
+        type: "fiscalList",
+        clientId: clean(message.clientId),
+        list: imported,
+        sentAt: Date.now(),
+      });
+      for (const session of this.sessions) {
+        if (session !== sender && session.readyState === WebSocket.OPEN) {
+          session.send(outgoingFiscal);
+        }
+      }
+      return;
+    }
     if (message.type !== "hello" && message.type !== "snapshot") return;
     const list = message.list;
     if (!isValidCompraLinkListSnapshot(list, sender.listId, sender.token)) return;
@@ -315,6 +339,76 @@ export class CompraLinkListRoom {
       }
     }
   }
+
+  async savePhoto(request, url, listId, token) {
+    let body;
+    try {
+      body = await request.json();
+    } catch (_) {
+      return json({ ok: false, error: "invalid_json" }, 400);
+    }
+    const image = String(body.image || "");
+    const contentType = String(body.contentType || "image/jpeg").toLowerCase();
+    if (!/^image\/jpe?g$/.test(contentType)) return json({ ok: false, error: "invalid_type" }, 400);
+    if (!/^[A-Za-z0-9+/=]+$/.test(image) || image.length < 80 || image.length > 450000) {
+      return json({ ok: false, error: "invalid_image" }, 400);
+    }
+    const photoId = crypto.randomUUID();
+    const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+    await this.state.storage.put(`photo:${photoId}`, {
+      image,
+      contentType,
+      createdAt: Date.now(),
+      expiresAt,
+    });
+    try {
+      await this.state.storage.setAlarm(expiresAt + 60000);
+    } catch (_) {
+    }
+    return json({
+      ok: true,
+      photoId,
+      expiresAt,
+      url: `${url.origin}/compralink-sync/${encodeURIComponent(listId)}/photo/${encodeURIComponent(photoId)}?token=${encodeURIComponent(token)}`,
+    });
+  }
+
+  async readPhoto(rawPhotoId) {
+    const photoId = clean(rawPhotoId || "");
+    if (!/^[A-Za-z0-9._~-]{8,120}$/.test(photoId)) return json({ ok: false, error: "invalid_photo" }, 400);
+    const record = await this.state.storage.get(`photo:${photoId}`);
+    if (!record || !record.image || Number(record.expiresAt || 0) <= Date.now()) {
+      if (record) await this.state.storage.delete(`photo:${photoId}`);
+      return json({ ok: false, error: "expired" }, 410);
+    }
+    const bytes = Uint8Array.from(atob(record.image), c => c.charCodeAt(0));
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": record.contentType || "image/jpeg",
+        "Cache-Control": "private, max-age=300",
+      },
+    });
+  }
+
+  async alarm() {
+    const now = Date.now();
+    const photos = await this.state.storage.list({ prefix: "photo:" });
+    let next = 0;
+    for (const [key, record] of photos) {
+      const expiresAt = Number(record && record.expiresAt || 0);
+      if (!expiresAt || expiresAt <= now) {
+        await this.state.storage.delete(key);
+      } else if (!next || expiresAt < next) {
+        next = expiresAt;
+      }
+    }
+    if (next) {
+      try {
+        await this.state.storage.setAlarm(next + 60000);
+      } catch (_) {
+      }
+    }
+  }
 }
 
 function isValidCompraLinkSyncId(value) {
@@ -331,6 +425,17 @@ function isValidCompraLinkListSnapshot(list, listId, token) {
     && list.id === listId
     && list.syncToken === token
     && Array.isArray(list.items)
+    && list.items.length < 2000;
+}
+
+function isValidCompraLinkImportedList(list) {
+  return list
+    && typeof list === "object"
+    && typeof list.id === "string"
+    && list.id.length >= 6
+    && list.id.length <= 120
+    && Array.isArray(list.items)
+    && list.items.length > 0
     && list.items.length < 2000;
 }
 
@@ -571,7 +676,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname.startsWith("/compralink-sync/")) {
-        const listId = clean(url.pathname.replace(/^\/compralink-sync\//, ""));
+        const listId = clean(url.pathname.replace(/^\/compralink-sync\//, "").split("/")[0] || "");
         if (!isValidCompraLinkSyncId(listId)) {
           return json({ ok: false, error: "invalid_sync" }, 400);
         }
